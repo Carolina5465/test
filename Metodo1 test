@@ -1,0 +1,59 @@
+@When("^\\[\\] Actualizo XML \"([^\"]+)\" con numeros de \"([^\"]+)\" y fecha actual$")
+public void actualizoXml(String rutaXml, String rutaTxt) throws Exception {
+    // === 1) Leer números del TXT (uno por línea) ===
+    List<String> numeros = java.nio.file.Files.readAllLines(java.nio.file.Paths.get(rutaTxt))
+            .stream().map(String::trim).filter(s -> !s.isEmpty()).toList();
+    if (numeros.isEmpty()) throw new IllegalStateException("El TXT de números está vacío: " + rutaTxt);
+
+    // === 2) Cargar XML ===
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(true);
+    DocumentBuilder db = dbf.newDocumentBuilder();
+    Document doc = db.parse(new java.io.File(rutaXml));
+    doc.getDocumentElement().normalize();
+
+    // === 3) XPath robusto (independiente de namespaces y alias de tag) ===
+    XPath xp = XPathFactory.newInstance().newXPath();
+    String xpNumero = "//*[local-name()='numeroDeclaracion' or local-name()='referenceNumber' or local-name()='numero' or local-name()='declaracionNumero']";
+    String xpFecha  = "//*[local-name()='fechaDeclaracion'  or local-name()='declarationDate'  or local-name()='fecha']";
+
+    NodeList nodosNumero = (NodeList) xp.evaluate(xpNumero, doc, XPathConstants.NODESET);
+    NodeList nodosFecha  = (NodeList) xp.evaluate(xpFecha,  doc, XPathConstants.NODESET);
+
+    if (nodosNumero.getLength() == 0) throw new IllegalStateException("No hay nodos de número de declaración.");
+    if (nodosFecha.getLength()  == 0) throw new IllegalStateException("No hay nodos de fecha de declaración.");
+
+    int n = Math.min(nodosNumero.getLength(), nodosFecha.getLength());
+    if (numeros.size() < n) {
+        throw new IllegalStateException("Faltan números. Necesarios: " + n + ", disponibles: " + numeros.size());
+    }
+
+    String hoy = java.time.LocalDate.now().toString(); // yyyy-MM-dd
+    int ok = 0;
+
+    // === 4) Asignación 1 a 1 en orden de aparición ===
+    for (int i = 0; i < n; i++) {
+        Node nodoNum = nodosNumero.item(i);
+        Node nodoFec = nodosFecha.item(i);
+        String numero = numeros.get(i);
+
+        nodoNum.setTextContent(numero);
+        nodoFec.setTextContent(hoy);
+        ok++;
+    }
+
+    // === 5) Guardar XML con indentación ===
+    Transformer tf = TransformerFactory.newInstance().newTransformer();
+    tf.setOutputProperty(OutputKeys.INDENT, "yes");
+    tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+    tf.transform(new DOMSource(doc), new StreamResult(new java.io.File(rutaXml)));
+
+    // === 6) (Opcional) Consumir números usados en el TXT ===
+    List<String> restantes = numeros.subList(n, numeros.size());
+    java.nio.file.Files.write(java.nio.file.Paths.get(rutaTxt), restantes,
+            java.nio.charset.StandardCharsets.UTF_8,
+            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+            java.nio.file.StandardOpenOption.CREATE);
+
+    System.out.println("[XML] Declaraciones actualizadas: " + ok + "/" + n + " | Fecha aplicada: " + hoy);
+}

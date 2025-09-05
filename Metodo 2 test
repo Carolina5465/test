@@ -1,0 +1,82 @@
+import io.cucumber.java.en.When;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import javax.xml.xpath.XPath;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathFactory;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.time.LocalDate;
+import java.util.List;
+
+public class OperationsFormsBaca {
+
+    @When("^\\[\\] Actualizo XML \"([^\"]+)\" con fecha y numeros de txt$")
+    public void actualizoXml(String rutaXml) throws Exception {
+
+        // === 1) Leer números del TXT en la raíz ===
+        List<String> numeros = Files.readAllLines(
+                Paths.get("numeros_formularios_masivos.txt"),
+                StandardCharsets.UTF_8
+        );
+        numeros.removeIf(String::isBlank); // eliminar líneas vacías
+
+        if (numeros.isEmpty()) {
+            throw new IllegalStateException("El archivo numeros_formularios_masivos.txt está vacío.");
+        }
+
+        // === 2) Cargar XML ===
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(true);
+        DocumentBuilder db = dbf.newDocumentBuilder();
+        Document doc = db.parse(new File(rutaXml));
+        doc.getDocumentElement().normalize();
+
+        // === 3) XPath para encontrar nodos ===
+        XPath xp = XPathFactory.newInstance().newXPath();
+        String xpNumero = "//*[local-name()='numeroDeclaracion']";
+        String xpFecha = "//*[local-name()='fechaDeclaracion']";
+
+        NodeList nodosNumero = (NodeList) xp.evaluate(xpNumero, doc, XPathConstants.NODESET);
+        NodeList nodosFecha = (NodeList) xp.evaluate(xpFecha, doc, XPathConstants.NODESET);
+
+        if (nodosNumero.getLength() == 0 || nodosFecha.getLength() == 0) {
+            throw new IllegalStateException("No se encontraron nodos en el XML.");
+        }
+
+        int n = Math.min(nodosNumero.getLength(), nodosFecha.getLength());
+        if (numeros.size() < n) {
+            throw new IllegalStateException("Faltan números en el TXT. Necesarios: " + n + ", disponibles: " + numeros.size());
+        }
+
+        String hoy = LocalDate.now().toString(); // yyyy-MM-dd
+
+        // === 4) Actualizar nodos ===
+        for (int i = 0; i < n; i++) {
+            Node nodoNum = nodosNumero.item(i);
+            Node nodoFec = nodosFecha.item(i);
+
+            nodoNum.setTextContent(numeros.get(i));
+            nodoFec.setTextContent(hoy);
+        }
+
+        // === 5) Guardar cambios ===
+        Transformer tf = TransformerFactory.newInstance().newTransformer();
+        tf.setOutputProperty(OutputKeys.INDENT, "yes");
+        tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+        tf.transform(new DOMSource(doc), new StreamResult(new File(rutaXml)));
+
+        System.out.println("XML actualizado con fecha " + hoy + " y " + n + " números.");
+    }
+}

@@ -1,0 +1,102 @@
+@When("^\\[\\] Actualizo XML \"([^\"]+)\" con fecha y numeros de txt$")
+public void actualizoXml_debug(String rutaXml) throws Exception {
+    System.out.println("==[XML Update]==");
+    System.out.println("Working dir: " + System.getProperty("user.dir"));
+    System.out.println("XML path    : " + rutaXml);
+
+    // 1) Leer TXT (raíz del proyecto)
+    java.nio.file.Path txtPath = java.nio.file.Paths.get("numeros_formularios_masivos.txt");
+    java.util.List<String> numeros = java.nio.file.Files.readAllLines(
+            txtPath, java.nio.charset.StandardCharsets.UTF_8);
+    numeros.removeIf(s -> s == null || s.trim().isEmpty());
+    System.out.println("Números leídos del TXT: " + numeros.size() + " (" + txtPath.toAbsolutePath() + ")");
+
+    if (numeros.isEmpty()) throw new IllegalStateException("El TXT está vacío: " + txtPath.toAbsolutePath());
+
+    // 2) Cargar XML
+    javax.xml.parsers.DocumentBuilderFactory dbf = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(true);
+    javax.xml.parsers.DocumentBuilder db = dbf.newDocumentBuilder();
+    org.w3c.dom.Document doc = db.parse(new java.io.File(rutaXml));
+    doc.getDocumentElement().normalize();
+
+    // 3) XPath (ajusta nombres si tus tags reales difieren)
+    javax.xml.xpath.XPath xp = javax.xml.xpath.XPathFactory.newInstance().newXPath();
+    String XP_NUM  = "//*[local-name()='numeroDeclaracion' or local-name()='referenceNumber']";
+    String XP_FECH = "//*[local-name()='fechaDeclaracion' or local-name()='declarationDate']";
+
+    org.w3c.dom.NodeList nn = (org.w3c.dom.NodeList) xp.evaluate(XP_NUM,  doc, javax.xml.xpath.XPathConstants.NODESET);
+    org.w3c.dom.NodeList nf = (org.w3c.dom.NodeList) xp.evaluate(XP_FECH, doc, javax.xml.xpath.XPathConstants.NODESET);
+
+    System.out.println("Nodos # encontrados: " + nn.getLength());
+    System.out.println("Nodos fecha encontrados: " + nf.getLength());
+
+    if (nn.getLength() == 0 || nf.getLength() == 0) {
+        // Dump rápido de nombres de los primeros 20 nodos hoja para ayudarte a ver cómo se llaman
+        org.w3c.dom.NodeList all = doc.getElementsByTagName("*");
+        System.out.print("Primeros nombres locales detectados: ");
+        int shown = 0;
+        for (int i = 0; i < all.getLength() && shown < 20; i++) {
+            org.w3c.dom.Node n = all.item(i);
+            String name = n.getLocalName() != null ? n.getLocalName() : n.getNodeName();
+            if (n.getChildNodes().getLength() == 1 && n.getFirstChild().getNodeType() == org.w3c.dom.Node.TEXT_NODE) {
+                System.out.print(name + " ");
+                shown++;
+            }
+        }
+        System.out.println();
+        throw new IllegalStateException("No se encontraron los tags esperados. Ajusta los nombres en los XPaths.");
+    }
+
+    int n = Math.min(nn.getLength(), nf.getLength());
+    if (numeros.size() < n) {
+        throw new IllegalStateException("Faltan números en el TXT. Necesarios: " + n + ", disponibles: " + numeros.size());
+    }
+
+    String hoy = java.time.LocalDate.now().toString();
+    int modificados = 0;
+
+    // 4) Reemplazar y mostrar los 3 primeros cambios
+    for (int i = 0; i < n; i++) {
+        org.w3c.dom.Node nNum = nn.item(i);
+        org.w3c.dom.Node nFec = nf.item(i);
+
+        String antesNum = nNum.getTextContent();
+        String antesFec = nFec.getTextContent();
+
+        nNum.setTextContent(numeros.get(i));
+        nFec.setTextContent(hoy);
+        modificados++;
+
+        if (i < 3) {
+            System.out.printf("Cambio[%d]: num '%s' -> '%s' | fecha '%s' -> '%s'%n",
+                    i + 1, antesNum, numeros.get(i), antesFec, hoy);
+        }
+    }
+
+    // 5) Backup y escritura
+    java.io.File xmlFile = new java.io.File(rutaXml);
+    java.nio.file.Path backup = java.nio.file.Paths.get(rutaXml + ".bak");
+    try {
+        java.nio.file.Files.copy(xmlFile.toPath(), backup, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        System.out.println("Backup creado: " + backup.toAbsolutePath());
+    } catch (Exception ex) {
+        System.out.println("No se pudo crear backup (continuo): " + ex.getMessage());
+    }
+
+    javax.xml.transform.Transformer tf = javax.xml.transform.TransformerFactory.newInstance().newTransformer();
+    tf.setOutputProperty(javax.xml.transform.OutputKeys.INDENT, "yes");
+    tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+    tf.transform(new javax.xml.transform.dom.DOMSource(doc),
+                 new javax.xml.transform.stream.StreamResult(xmlFile));
+    System.out.println("Archivo sobrescrito: " + xmlFile.getAbsolutePath());
+
+    // También genera un -mod.xml para inspección visual inmediata
+    java.nio.file.Path alt = java.nio.file.Paths.get(
+            xmlFile.getParent(), xmlFile.getName().replace(".xml", "-mod.xml"));
+    tf.transform(new javax.xml.transform.dom.DOMSource(doc),
+                 new javax.xml.transform.stream.StreamResult(alt.toFile()));
+    System.out.println("Archivo alterno: " + alt.toAbsolutePath());
+
+    System.out.println("Total modificados: " + modificados + " | Fecha aplicada: " + hoy);
+}

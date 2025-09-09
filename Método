@@ -1,0 +1,141 @@
+import io.cucumber.java.en.When;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import javax.xml.xpath.XPath;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathFactory;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.time.LocalDate;
+import java.util.List;
+
+@When("^Agentsit\\s+Actualizo\\s+XML\\s+\"([^\"]+)\"\\s+con\\s+nombre\\s+de\\s+(\\$\\w+)$")
+public void actualizoXml(String rutaXml, String nombreParam) throws Exception {
+    System.out.println("==[XML Update]==");
+    System.out.println("XML path: " + rutaXml);
+
+    // ---------------- 1) Leer TXT en la raíz del proyecto ----------------
+    Path txtPath = Paths.get("numeros_formularios_masivos.txt");
+    List<String> numeros = Files.readAllLines(txtPath, StandardCharsets.UTF_8);
+    numeros.removeIf(s -> s == null || s.trim().isEmpty());
+    if (numeros.isEmpty()) {
+        throw new IllegalStateException("El TXT está vacío: " + txtPath.toAbsolutePath());
+    }
+
+    // ---------------- 2) Cargar XML ----------------
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(true);
+    DocumentBuilder db = dbf.newDocumentBuilder();
+    Document doc = db.parse(new File(rutaXml));
+    doc.getDocumentElement().normalize();
+
+    // ---------------- 3) Encontrar nodos (ajusta tags si difieren) ----------------
+    XPath xp = XPathFactory.newInstance().newXPath();
+    String XP_NUM  = "//*[local-name()='numeroDeclaracion' or local-name()='referenceNumber']";
+    String XP_FECH = "//*[local-name()='fechaDeclaracion' or local-name()='declarationDate']";
+
+    NodeList nn = (NodeList) xp.evaluate(XP_NUM,  doc, XPathConstants.NODESET);
+    NodeList nf = (NodeList) xp.evaluate(XP_FECH, doc, XPathConstants.NODESET);
+
+    if (nn.getLength() == 0 || nf.getLength() == 0) {
+        throw new IllegalStateException("No se encontraron nodos de número o fecha en el XML.");
+    }
+
+    int n = Math.min(nn.getLength(), nf.getLength());
+    if (numeros.size() < n) {
+        throw new IllegalStateException("Faltan números en el TXT. Necesarios: " + n + ", disponibles: " + numeros.size());
+    }
+
+    String hoy = LocalDate.now().toString(); // yyyy-MM-dd
+    for (int i = 0; i < n; i++) {
+        Node nNum = nn.item(i);
+        Node nFec = nf.item(i);
+        nNum.setTextContent(numeros.get(i));
+        nFec.setTextContent(hoy);
+    }
+
+    // ---------------- 4) Guardar cambios (backup + overwrite) ----------------
+    Path xmlPath = Paths.get(rutaXml);
+    Path backup = Paths.get(rutaXml + ".bak");
+    try {
+        Files.copy(xmlPath, backup, StandardCopyOption.REPLACE_EXISTING);
+        System.out.println("Backup creado en: " + backup.toAbsolutePath());
+    } catch (Exception ex) {
+        System.out.println("No se pudo crear backup (continuo): " + ex.getMessage());
+    }
+
+    Transformer tf = TransformerFactory.newInstance().newTransformer();
+    tf.setOutputProperty(OutputKeys.INDENT, "yes");
+    tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+    tf.transform(new DOMSource(doc), new StreamResult(new File(rutaXml)));
+
+    System.out.println("Archivo sobrescrito: " + xmlPath.toAbsolutePath());
+    System.out.println("Total nodos actualizados: " + n + " | Fecha aplicada: " + hoy);
+
+    // ---------------- 5) RENOMBRAR usando el ÚLTIMO valor capturado ----------------
+    // Ese valor debe haber sido guardado por el step previo "read text ... into $variable".
+    String nombreBase = null;
+
+    try {
+        Object last = this.getScenarioContext().getLastStepResultVariable();
+        if (last != null) {
+            if (last.getClass().isArray()) {
+                Object first = java.lang.reflect.Array.getLength(last) > 0
+                        ? java.lang.reflect.Array.get(last, 0) : null;
+                nombreBase = first != null ? String.valueOf(first) : null;
+            } else {
+                nombreBase = String.valueOf(last);
+            }
+        }
+    } catch (Throwable ignore) { /* fallback abajo */ }
+
+    // Fallback: si también lo guardas en GlobalContext con el nombre de variable
+    if (nombreBase == null || nombreBase.trim().isEmpty()) {
+        try {
+            String key = (nombreParam != null && nombreParam.startsWith("$"))
+                    ? nombreParam.substring(1) : nombreParam;
+            Object gcVal = GlobalContext.get(key);
+            if (gcVal == null) gcVal = GlobalContext.get(nombreParam);
+            nombreBase = (gcVal != null) ? String.valueOf(gcVal) : null;
+        } catch (Throwable ignore) { }
+    }
+
+    if (nombreBase == null || nombreBase.trim().isEmpty()) {
+        throw new IllegalStateException(
+                "No pude resolver el nombre capturado. " +
+                "Asegúrate de ejecutar antes el step que hace 'read text ... into " + nombreParam + "'.");
+    }
+
+    // Sanitizar y construir destino (misma carpeta, misma extensión)
+    String limpio = nombreBase.trim()
+            .replaceAll("\\p{M}+", "")                 // quita diacríticos si llegaran
+            .replaceAll("[\\\\/:*?\"<>|]", "_");        // caracteres inválidos
+    if (limpio.isEmpty()) {
+        throw new IllegalStateException("El nombre resultante quedó vacío tras sanear: " + nombreBase);
+    }
+
+    String original = xmlPath.getFileName().toString();
+    String ext = original.contains(".") ? original.substring(original.lastIndexOf('.')) : ".xml";
+    Path dir = (xmlPath.getParent() == null) ? Paths.get(".") : xmlPath.getParent();
+    Path destino = dir.resolve(limpio + ext);
+
+    // Evitar colisiones: añade (_1), (_2), ...
+    int seq = 1;
+    while (Files.exists(destino)) {
+        destino = dir.resolve(limpio + "(_" + seq + ")" + ext);
+        seq++;
+    }
+
+    Files.move(xmlPath, destino, StandardCopyOption.REPLACE_EXISTING);
+    System.out.println("XML renombrado a: " + destino.toAbsolutePath());
+}

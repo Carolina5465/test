@@ -1,0 +1,16 @@
+// Obtener el valor del nodo (nombre base) usando XPath
+String nombreBase = nodes.item(0).getTextContent(); // ej: "Declaracion_12345"
+
+// Limpiar el nombre para que sea válido como archivo
+String limpio = nombreBase.trim()
+        .replaceAll("[\\\\/:*?\"<>|]", "_");  // quita caracteres no permitidos
+
+// Construir el destino en la misma carpeta con extensión .xml
+Path dir = xmlPath.getParent();
+if (dir == null) dir = Paths.get(".");
+Path destino = dir.resolve(limpio + ".xml");
+
+// Renombrar (sobreescribir si ya existía un archivo con ese nombre)
+Files.move(xmlPath, destino, StandardCopyOption.REPLACE_EXISTING);
+
+System.out.println("XML renombrado a: " + destino.toAbsolutePath());

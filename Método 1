@@ -1,0 +1,119 @@
+@When("^Agentsit\\s+Actualizo\\s+XML\\s+\"([^\"]+)\"\\s+con\\s+nombre\\s+de\\s+(\\$\\w+)$")
+public void actualizoXml(String rutaXml, String nombreParam) throws Exception {
+    System.out.println("==[XML Update]==");
+    System.out.println("XML path: " + rutaXml);
+
+    // -------- 0) Asegurar que la plantilla exista (si no, intentar restaurar) --------
+    Path xmlPath = Paths.get(rutaXml);
+    if (!Files.exists(xmlPath)) {
+        Path bak = Paths.get(rutaXml + ".bak");
+        Path template = xmlPath.getParent() == null ? null : xmlPath.getParent().resolve("formularios_template.xml");
+        if (Files.exists(bak)) {
+            Files.copy(bak, xmlPath, StandardCopyOption.REPLACE_EXISTING);
+            System.out.println("Plantilla restaurada desde .bak");
+        } else if (template != null && Files.exists(template)) {
+            Files.copy(template, xmlPath, StandardCopyOption.REPLACE_EXISTING);
+            System.out.println("Plantilla restaurada desde formularios_template.xml");
+        } else {
+            throw new java.io.FileNotFoundException("No existe la plantilla " + xmlPath.toAbsolutePath());
+        }
+    }
+
+    // -------- 1) Leer TXT en la raíz del proyecto --------
+    Path txtPath = Paths.get("numeros_formularios_masivos.txt");
+    List<String> numeros = Files.readAllLines(txtPath, StandardCharsets.UTF_8);
+    numeros.removeIf(s -> s == null || s.trim().isEmpty());
+    if (numeros.isEmpty()) throw new IllegalStateException("El TXT está vacío: " + txtPath.toAbsolutePath());
+
+    // -------- 2) Cargar XML (PLANTILLA) --------
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(true);
+    DocumentBuilder db = dbf.newDocumentBuilder();
+    Document doc = db.parse(new File(rutaXml));
+    doc.getDocumentElement().normalize();
+
+    // -------- 3) XPaths (ajusta tags si difieren) --------
+    XPath xp = XPathFactory.newInstance().newXPath();
+    String XP_NUM  = "//*[local-name()='numeroDeclaracion' or local-name()='referenceNumber']";
+    String XP_FECH = "//*[local-name()='fechaDeclaracion' or local-name()='declarationDate']";
+
+    NodeList nn = (NodeList) xp.evaluate(XP_NUM,  doc, XPathConstants.NODESET);
+    NodeList nf = (NodeList) xp.evaluate(XP_FECH, doc, XPathConstants.NODESET);
+    if (nn.getLength() == 0 || nf.getLength() == 0)
+        throw new IllegalStateException("No se encontraron nodos de número o fecha en el XML.");
+
+    int n = Math.min(nn.getLength(), nf.getLength());
+    if (numeros.size() < n)
+        throw new IllegalStateException("Faltan números en el TXT. Necesarios: " + n + ", disponibles: " + numeros.size());
+
+    String hoy = java.time.LocalDate.now().toString();
+    for (int i = 0; i < n; i++) {
+        Node nNum = nn.item(i);
+        Node nFec = nf.item(i);
+        nNum.setTextContent(numeros.get(i));
+        nFec.setTextContent(hoy);
+    }
+
+    // -------- 4) Resolver el NOMBRE dinámico desde el último step (sin XPath de web) --------
+    String nombreBase = null;
+    try {
+        Object last = this.getScenarioContext().getLastStepResultVariable();
+        if (last != null) {
+            if (last.getClass().isArray()) {
+                Object first = java.lang.reflect.Array.getLength(last) > 0
+                        ? java.lang.reflect.Array.get(last, 0) : null;
+                nombreBase = first != null ? String.valueOf(first) : null;
+            } else {
+                nombreBase = String.valueOf(last);
+            }
+        }
+    } catch (Throwable ignore) { }
+
+    // Fallback GlobalContext por si guardaste allí la variable
+    if (nombreBase == null || nombreBase.trim().isEmpty()) {
+        try {
+            String key = (nombreParam != null && nombreParam.startsWith("$"))
+                    ? nombreParam.substring(1) : nombreParam;
+            Object gcVal = GlobalContext.get(key);
+            if (gcVal == null) gcVal = GlobalContext.get(nombreParam);
+            nombreBase = (gcVal != null) ? String.valueOf(gcVal) : null;
+        } catch (Throwable ignore) { }
+    }
+    if (nombreBase == null || nombreBase.trim().isEmpty())
+        throw new IllegalStateException("No pude resolver el nombre capturado. Ejecuta antes 'read text ... into "
+                + nombreParam + "'.");
+
+    String limpio = nombreBase.trim()
+            .replaceAll("\\p{M}+", "")
+            .replaceAll("[\\\\/:*?\"<>|]", "_");
+    if (limpio.isEmpty())
+        throw new IllegalStateException("El nombre resultante quedó vacío tras sanear: " + nombreBase);
+
+    // -------- 5) Construir DESTINO (nuevo archivo), evitar colisión --------
+    String original = xmlPath.getFileName().toString();
+    String ext = original.contains(".") ? original.substring(original.lastIndexOf('.')) : ".xml";
+    Path dir = (xmlPath.getParent() == null) ? Paths.get(".") : xmlPath.getParent();
+    Path destino = dir.resolve(limpio + ext);
+    int seq = 1;
+    while (Files.exists(destino)) {
+        destino = dir.resolve(limpio + "(_" + seq + ")" + ext);
+        seq++;
+    }
+
+    // -------- 6) Guardar EL XML MODIFICADO en el NUEVO archivo (la plantilla NO se toca) --------
+    Transformer tf = TransformerFactory.newInstance().newTransformer();
+    tf.setOutputProperty(OutputKeys.INDENT, "yes");
+    tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+    tf.transform(new DOMSource(doc), new StreamResult(destino.toFile()));
+
+    // (Opcional) backup de la plantilla por si quieres conservar una copia
+    try {
+        Files.copy(xmlPath, Paths.get(rutaXml + ".bak"), StandardCopyOption.REPLACE_EXISTING);
+    } catch (Exception ex) {
+        System.out.println("No se pudo crear backup de la plantilla (continuo): " + ex.getMessage());
+    }
+
+    System.out.println("Plantilla intacta: " + xmlPath.toAbsolutePath());
+    System.out.println("Nuevo XML generado: " + destino.toAbsolutePath());
+    System.out.println("Fecha aplicada: " + hoy + " | Nodos actualizados: " + n);
+}

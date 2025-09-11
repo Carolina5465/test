@@ -1,0 +1,25 @@
+@When("^Agentsit Scroll hasta el final$")
+public void scrollHastaElFinal() throws Exception {
+    String agentName = "web"; // o el nombre que uses en tu proyecto
+
+    // Cantidad de píxeles por “paginazo”
+    int pixelsPorScroll = 800;
+
+    // Número máximo de “paginazos” que quieras hacer hasta el final
+    int maxScrolls = 30;
+
+    for (int i = 0; i < maxScrolls; i++) {
+        try {
+            AgentsManager.getInstance()
+                .getOrCreateAgent(agentName)
+                .run("scrollPage", new Object[]{0, pixelsPorScroll}); // bajar
+
+            System.out.println("[INFO] Scroll paso " + (i + 1));
+            Thread.sleep(200); // pequeña pausa para que cargue
+        } catch (Exception e) {
+            System.out.println("[WARN] Fallo scroll en paso " + (i + 1) + ": " + e.getMessage());
+        }
+    }
+
+    System.out.println("[INFO] Scroll completado hasta el final (aprox).");
+}

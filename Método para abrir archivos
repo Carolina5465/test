@@ -1,0 +1,24 @@
+import java.awt.Robot;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyEvent;
+
+...
+
+String rutaArchivo = "\\\\10.105.125.173\\Data-share\\BACA\\Test_Automation\\ProcesosBACA\\DC-N_860051135-250911093955.xml";
+
+// Copiar al portapapeles
+StringSelection ss = new StringSelection(rutaArchivo);
+Toolkit.getDefaultToolkit().getSystemClipboard().setContents(ss, null);
+
+// Simular Ctrl+V y Enter
+Robot robot = new Robot();
+robot.setAutoDelay(200);  // pequeño delay para mayor estabilidad
+
+robot.keyPress(KeyEvent.VK_CONTROL);
+robot.keyPress(KeyEvent.VK_V);
+robot.keyRelease(KeyEvent.VK_V);
+robot.keyRelease(KeyEvent.VK_CONTROL);
+
+robot.keyPress(KeyEvent.VK_ENTER);
+robot.keyRelease(KeyEvent.VK_ENTER);

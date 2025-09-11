@@ -1,0 +1,90 @@
+@When("^Agentsit\\s+Actualizo\\s+XML\\s+\"([^\"]+)\"\\s+con\\s+numeros?\\s+del\\s+txt\\s+y\\s+fecha\\s+actual$")
+public void actualizoXml(String rutaXml) throws Exception {
+    System.out.println("==[XML Update]==");
+    System.out.println("XML path: " + rutaXml);
+
+    // 1) Leer TXT en la raíz del proyecto
+    Path txtPath = Paths.get("numeros_formularios_masivos.txt");
+    List<String> numeros = Files.readAllLines(txtPath, StandardCharsets.UTF_8);
+    numeros.removeIf(s -> s == null || s.trim().isEmpty());
+
+    if (numeros.isEmpty()) {
+        throw new IllegalStateException("El TXT está vacío: " + txtPath.toAbsolutePath());
+    }
+
+    // 2) Cargar XML
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(true);
+    DocumentBuilder db = dbf.newDocumentBuilder();
+    Document doc = db.parse(new File(rutaXml));
+    doc.getDocumentElement().normalize();
+
+    // 3) XPath (ajusta según los tags reales de tu XML)
+    XPath xp = XPathFactory.newInstance().newXPath();
+    String XP_NUM  = "//*[local-name()='numeroDeclaracion' or local-name()='referenceNumber']";
+    String XP_FECH = "//*[local-name()='fechaDeclaracion' or local-name()='declarationDate']";
+
+    NodeList nn = (NodeList) xp.evaluate(XP_NUM,  doc, XPathConstants.NODESET);
+    NodeList nf = (NodeList) xp.evaluate(XP_FECH, doc, XPathConstants.NODESET);
+
+    if (nn.getLength() == 0 || nf.getLength() == 0) {
+        throw new IllegalStateException("No se encontraron nodos de número o fecha en el XML.");
+    }
+
+    // ================== NUEVA LÓGICA FLEXIBLE ==================
+    // Cantidades disponibles
+    int lenNumNodes  = nn.getLength();
+    int lenFechaNodes = nf.getLength();
+    int lenNumeros   = numeros.size();
+
+    // Usar lo que haya disponible
+    int n = Math.min(Math.min(lenNumNodes, lenFechaNodes), lenNumeros);
+
+    if (n == 0) {
+        throw new IllegalStateException(
+            "No hay nada para procesar: nodos numero=" + lenNumNodes +
+            ", nodos fecha=" + lenFechaNodes + ", numeros TXT=" + lenNumeros);
+    }
+
+    // Log informativo si hay “sobrantes”
+    if (lenNumeros > n) {
+        System.out.println("[WARN] Hay " + (lenNumeros - n) +
+            " números en TXT que no se usarán (solo se actualizarán " + n + ").");
+    }
+    if (lenNumNodes > n || lenFechaNodes > n) {
+        System.out.println("[WARN] El XML tiene más nodos que números (" + n + " usados).");
+    }
+
+    // Fecha actual
+    String hoy = java.time.LocalDate.now().toString();
+
+    // Actualizar solo los primeros n
+    for (int i = 0; i < n; i++) {
+        org.w3c.dom.Node nNum  = nn.item(i);
+        org.w3c.dom.Node nFec  = nf.item(i);
+        nNum.setTextContent(numeros.get(i));
+        nFec.setTextContent(hoy);
+    }
+    // ============================================================
+
+    // 4) Guardar cambios (sobreescribir y crear .bak)
+    Path xmlPath = Paths.get(rutaXml);
+    Path backup = Paths.get(rutaXml + ".bak");
+
+    try {
+        Files.copy(xmlPath, backup, StandardCopyOption.REPLACE_EXISTING);
+        System.out.println("Backup creado en: " + backup.toAbsolutePath());
+    } catch (Exception ex) {
+        System.out.println("No se pudo crear backup (continuo): " + ex.getMessage());
+    }
+
+    Transformer tf = TransformerFactory.newInstance().newTransformer();
+    tf.setOutputProperty(OutputKeys.INDENT, "yes");
+    tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+
+    // Sobrescribir el archivo original
+    tf.transform(new DOMSource(doc), new StreamResult(new File(rutaXml)));
+
+    System.out.println("Archivo sobrescrito: " + xmlPath.toAbsolutePath());
+    System.out.println("Total nodos actualizados: " + n + " | Fecha aplicada: " + hoy);
+}

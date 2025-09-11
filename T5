@@ -1,0 +1,57 @@
+import java.awt.*;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyEvent;
+
+public void cargarArchivoDialogo(String rutaCarpeta, String nombreArchivo) throws Exception {
+    Robot robot = new Robot();
+    robot.setAutoDelay(220); // dale un respiro al diálogo
+
+    // === 1) Barra de direcciones ===
+    // (Ctrl+L también sirve; Alt+D es otra opción)
+    robot.keyPress(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_L);
+    robot.keyRelease(KeyEvent.VK_L);
+    robot.keyRelease(KeyEvent.VK_CONTROL);
+
+    // Pegar la carpeta
+    Toolkit.getDefaultToolkit().getSystemClipboard()
+           .setContents(new StringSelection(rutaCarpeta), null);
+    robot.keyPress(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_CONTROL);
+
+    // Entrar a la carpeta
+    robot.keyPress(KeyEvent.VK_ENTER);
+    robot.keyRelease(KeyEvent.VK_ENTER);
+
+    // === 2) Forzar foco al cajón "File name" ===
+    // Opción A: tecla aceleradora (Alt+N = "Nombre de archivo") suele funcionar en ES
+    robot.keyPress(KeyEvent.VK_ALT);
+    robot.keyPress(KeyEvent.VK_N);
+    robot.keyRelease(KeyEvent.VK_N);
+    robot.keyRelease(KeyEvent.VK_ALT);
+
+    // Fallback A: si no funcionó, intenta con TABs (2-3 veces suele bastar)
+    // (Deja un pequeño delay antes por si el diálogo tarda)
+    robot.delay(150);
+    // Comenta estas líneas si Alt+N ya te llevó al campo:
+    robot.keyPress(KeyEvent.VK_TAB); robot.keyRelease(KeyEvent.VK_TAB);
+    robot.keyPress(KeyEvent.VK_TAB); robot.keyRelease(KeyEvent.VK_TAB);
+    // Si aún no llega, prueba un TAB extra:
+    // robot.keyPress(KeyEvent.VK_TAB); robot.keyRelease(KeyEvent.VK_TAB);
+
+    // Fallback B (último recurso): F6 cicla entre paneles del diálogo
+    // robot.keyPress(KeyEvent.VK_F6); robot.keyRelease(KeyEvent.VK_F6);
+
+    // === 3) Escribir/pegar el nombre del archivo y abrir ===
+    Toolkit.getDefaultToolkit().getSystemClipboard()
+           .setContents(new StringSelection(nombreArchivo), null);
+    robot.keyPress(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_CONTROL);
+
+    robot.keyPress(KeyEvent.VK_ENTER);
+    robot.keyRelease(KeyEvent.VK_ENTER);
+}

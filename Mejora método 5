@@ -1,0 +1,39 @@
+// ===== 4.b) Construir nombre con formato especial =====
+String base = nombreBase.trim();
+
+// Quitar extensión .xml si ya viene
+String baseSinExt = base.replaceFirst("(?i)\\.xml$", "");
+
+// Obtener última parte después del último "_"
+String ultimaParte = baseSinExt.contains("_")
+        ? baseSinExt.substring(baseSinExt.lastIndexOf('_') + 1)
+        : baseSinExt;
+
+// Sanear caracteres peligrosos
+baseSinExt = java.text.Normalizer.normalize(baseSinExt, java.text.Normalizer.Form.NFD)
+        .replaceAll("\\p{M}+", "")
+        .replaceAll("[^A-Za-z0-9._-]", "_")
+        .replaceFirst("^_+", "");   // quitar guiones bajos iniciales
+
+ultimaParte = java.text.Normalizer.normalize(ultimaParte, java.text.Normalizer.Form.NFD)
+        .replaceAll("\\p{M}+", "")
+        .replaceAll("[^A-Za-z0-9._-]", "_")
+        .replaceFirst("^_+", "");   // quitar guiones bajos iniciales
+
+// Construir nombre final con sufijo fijo _0001_
+String ext = ".xml";
+Path dir = (plantillaPath.getParent() == null)
+        ? Paths.get(".")
+        : plantillaPath.getParent();
+
+String nombreFinal = baseSinExt + "_0001_" + ultimaParte + ext;
+Path destino = dir.resolve(nombreFinal);
+
+// -------- 6) Guardar el XML MODIFICADO en el NUEVO archivo (si existe, sobrescribe) --------
+Transformer tf = TransformerFactory.newInstance().newTransformer();
+tf.setOutputProperty(OutputKeys.INDENT, "yes");
+tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+tf.transform(new javax.xml.transform.dom.DOMSource(doc),
+             new javax.xml.transform.stream.StreamResult(destino.toFile()));
+
+System.out.println("Archivo final (sobrescrito si ya existía): " + destino.toAbsolutePath());

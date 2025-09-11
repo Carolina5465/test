@@ -1,0 +1,38 @@
+import java.awt.*;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyEvent;
+
+public void cargarArchivoDialogo(String rutaCarpeta, String nombreArchivo) throws Exception {
+    Robot robot = new Robot();
+    robot.setAutoDelay(250); // pausa entre acciones para que el diálogo responda
+
+    // === 1) Seleccionar la barra de direcciones (Alt+D) ===
+    robot.keyPress(KeyEvent.VK_ALT);
+    robot.keyPress(KeyEvent.VK_D);
+    robot.keyRelease(KeyEvent.VK_D);
+    robot.keyRelease(KeyEvent.VK_ALT);
+
+    // Pegar la ruta de la carpeta
+    Toolkit.getDefaultToolkit().getSystemClipboard()
+           .setContents(new StringSelection(rutaCarpeta), null);
+    robot.keyPress(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_CONTROL);
+
+    // Enter para navegar a la carpeta
+    robot.keyPress(KeyEvent.VK_ENTER);
+    robot.keyRelease(KeyEvent.VK_ENTER);
+
+    // === 2) Ir al cajón "File name" (ya está enfocado por defecto) ===
+    Toolkit.getDefaultToolkit().getSystemClipboard()
+           .setContents(new StringSelection(nombreArchivo), null);
+    robot.keyPress(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_CONTROL);
+
+    // Enter para confirmar y cargar el archivo
+    robot.keyPress(KeyEvent.VK_ENTER);
+    robot.keyRelease(KeyEvent.VK_ENTER);
+}

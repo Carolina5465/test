@@ -1,0 +1,45 @@
+void cargarArchivoConRobot(String carpeta, String nombreArchivo) throws Exception {
+    Robot robot = new Robot();
+    robot.setAutoDelay(200);
+
+    // 1) Ir a barra de direcciones
+    robot.keyPress(KeyEvent.VK_ALT);
+    robot.keyPress(KeyEvent.VK_D);
+    robot.keyRelease(KeyEvent.VK_D);
+    robot.keyRelease(KeyEvent.VK_ALT);
+
+    // 2) Pegar carpeta
+    Toolkit.getDefaultToolkit().getSystemClipboard()
+          .setContents(new StringSelection(carpeta), null);
+    robot.keyPress(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_ENTER);
+    robot.keyRelease(KeyEvent.VK_ENTER);
+
+    // 3) Pegar nombre de archivo
+    Toolkit.getDefaultToolkit().getSystemClipboard()
+          .setContents(new StringSelection(nombreArchivo), null);
+    robot.keyPress(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_ENTER);
+    robot.keyRelease(KeyEvent.VK_ENTER);
+}
+
+// Ruta de la carpeta donde está tu archivo
+String carpeta = "\\\\10.105.125.173\\Data-share\\BACA\\Test_Automation\\ProcesosBACA";
+
+// Nombre del archivo (solo el nombre, sin carpeta)
+String nombre = "DC-N_860051135-250911093955_0001_250911093955.xml";
+
+// Llamas al método
+cargarArchivoConRobot(carpeta, nombre);
+
+
+
+
+
+

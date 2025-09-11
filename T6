@@ -1,0 +1,3 @@
+String carpeta = "\\\\10.105.125.173\\Data-share\\BACA\\Test_Automation\\ProcesosBACA";
+String archivo = "DC-N_860051135-250911093955_0001_250911093955.xml";
+cargarArchivoDialogo(carpeta, archivo);

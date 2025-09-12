@@ -1,0 +1,33 @@
+@When("^Agentsit escribe solo el nombre del archivo y confirma$")
+public void escribirSoloNombreArchivoYConfirmar() throws Exception {
+    if (LAST_XML_GENERADO == null) {
+        throw new IllegalStateException("No hay XML generado previamente (LAST_XML_GENERADO es null).");
+    }
+
+    // Obtener SOLO el nombre del archivo generado
+    String soloNombre = LAST_XML_GENERADO.getFileName().toString();
+
+    // Copiar al portapapeles
+    Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+            new StringSelection(soloNombre), null);
+
+    Robot r = new Robot();
+    r.setAutoDelay(100);
+
+    // Foco en File name (ALT+N en la mayoría de Windows; si no, usa TAB varias veces)
+    r.keyPress(KeyEvent.VK_ALT); r.keyPress(KeyEvent.VK_N);
+    r.keyRelease(KeyEvent.VK_N); r.keyRelease(KeyEvent.VK_ALT);
+
+    // Limpiar campo: Ctrl+A + Supr
+    r.keyPress(KeyEvent.VK_CONTROL); r.keyPress(KeyEvent.VK_A);
+    r.keyRelease(KeyEvent.VK_A); r.keyRelease(KeyEvent.VK_CONTROL);
+    r.keyPress(KeyEvent.VK_DELETE); r.keyRelease(KeyEvent.VK_DELETE);
+
+    // Pegar el nombre y confirmar
+    r.keyPress(KeyEvent.VK_CONTROL); r.keyPress(KeyEvent.VK_V);
+    r.keyRelease(KeyEvent.VK_V); r.keyRelease(KeyEvent.VK_CONTROL);
+
+    r.keyPress(KeyEvent.VK_ENTER); r.keyRelease(KeyEvent.VK_ENTER);
+
+    System.out.println("Se escribió en File name: " + soloNombre);
+}

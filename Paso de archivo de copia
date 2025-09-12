@@ -1,0 +1,93 @@
+// ===== en tu clase de steps =====
+import java.nio.file.*;
+import java.awt.datatransfer.*;
+import java.util.*;
+
+public class OperationsFormsBaca extends BaseCommonStepdefs {
+
+    // Guarda aquí el último XML generado (así no dependemos del GlobalContext).
+    private static Path ULTIMO_XML_GENERADO;
+
+    // Llama esto donde generas el XML:
+    // ULTIMO_XML_GENERADO = destino;
+
+    /** Paso: And Agentsit creo copia del archivo en la ruta "downloads" */
+    @When("^Agentsit\\s+creo\\s+copia\\s+del\\s+archivo\\s+en\\s+la\\s+ruta\\s+\"([^\"]+)\"$")
+    public void copiaXML(String rutaDestinoHint) throws Exception {
+        // 1) Resolver origen
+        Path origen = resolverOrigenDesdeContexto();
+        if (origen == null || !Files.exists(origen)) {
+            throw new IllegalStateException("No tengo un XML generado recientemente o no existe el archivo.");
+        }
+
+        // 2) Resolver carpeta destino a partir del hint
+        Path dirDestino = resolverDirectorioDestino(rutaDestinoHint);
+        Files.createDirectories(dirDestino);
+
+        // 3) Copiar (sobrescribe si ya existe)
+        Path destino = dirDestino.resolve(origen.getFileName());
+        Files.copy(origen, destino, StandardCopyOption.REPLACE_EXISTING);
+        System.out.println("Copia creada en: " + destino.toAbsolutePath());
+
+        // 4) (Opcional) Poner la COPIA en el portapapeles como archivo (para dialogos Open…)
+        List<File> fileList = Collections.singletonList(destino.toFile());
+        Transferable t = new Transferable() {
+            private final DataFlavor[] fs = new DataFlavor[]{DataFlavor.javaFileListFlavor};
+            @Override public DataFlavor[] getTransferDataFlavors() { return fs; }
+            @Override public boolean isDataFlavorSupported(DataFlavor f) { return DataFlavor.javaFileListFlavor.equals(f); }
+            @Override public Object getTransferData(DataFlavor f) { return fileList; }
+        };
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(t, null);
+        System.out.println("→ Copia puesta en portapapeles: " + destino.getFileName());
+    }
+
+    // ---------- helpers ----------
+    private Path resolverOrigenDesdeContexto() {
+        // 1) Lo que haya guardado el generador
+        if (ULTIMO_XML_GENERADO != null && Files.exists(ULTIMO_XML_GENERADO)) {
+            return ULTIMO_XML_GENERADO;
+        }
+        // 2) Intento leer del “last step result” si tu framework lo expone
+        try {
+            Object last = this.getScenarioContext().getLastStepResultVariable();
+            if (last != null) {
+                Path p = Paths.get(String.valueOf(last));
+                if (Files.exists(p)) return p;
+            }
+        } catch (Throwable ignore) {}
+        // 3) Nada más que probar
+        return null;
+    }
+
+    private Path resolverDirectorioDestino(String hint) {
+        if (hint == null || hint.trim().isEmpty()) {
+            hint = "downloads";
+        }
+        String h = hint.trim().toLowerCase();
+
+        // Palabras clave portables
+        Path home = Paths.get(System.getProperty("user.home"));
+        if (h.equals("downloads") || h.equals("download") || h.equals("descargas")) {
+            return home.resolve("Downloads");
+        }
+        if (h.equals("desktop") || h.equals("escritorio")) {
+            return home.resolve("Desktop");
+        }
+        if (h.equals("temp") || h.equals("tmp")) {
+            return Paths.get(System.getProperty("java.io.tmpdir"));
+        }
+
+        // Si viene una ruta absoluta (Windows o UNIX) o UNC \\server\share...
+        if (hint.startsWith("\\\\")                          // UNC
+            || hint.matches("^[A-Za-z]:[\\\\/].*")          // C:\...
+            || hint.startsWith("/")) {                      // /home/...
+            return Paths.get(hint);
+        }
+
+        // Si es relativa: respecto al dir de trabajo (proyecto)
+        return Paths.get(hint);
+    }
+
+    // (en tu método que genera el XML, después de crear 'destino', añade):
+    // ULTIMO_XML_GENERADO = destino;
+}

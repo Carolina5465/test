@@ -1,0 +1,33 @@
+import java.awt.*;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyEvent;
+
+@When("^Agentsit\\s+escribe\\s+el\\s+nombre\\s+del\\s+archivo$")
+public void escribirNombreArchivoEnDialogo() throws Exception {
+    if (ULTIMO_XML_GENERADO == null) {
+        throw new IllegalStateException("No hay un XML generado recientemente.");
+    }
+
+    // Tomar solo el nombre del archivo (no la ruta completa)
+    String nombreArchivo = ULTIMO_XML_GENERADO.getFileName().toString();
+    System.out.println("Nombre a escribir en File name: " + nombreArchivo);
+
+    // Copiar al portapapeles
+    StringSelection ss = new StringSelection(nombreArchivo);
+    Toolkit.getDefaultToolkit().getSystemClipboard().setContents(ss, null);
+
+    // Simular Ctrl+V y Enter en el campo de File name
+    Robot robot = new Robot();
+    robot.delay(1000); // pequeño delay para dar tiempo a enfocar el cuadro de diálogo
+
+    robot.keyPress(KeyEvent.VK_CONTROL);
+    robot.keyPress(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_V);
+    robot.keyRelease(KeyEvent.VK_CONTROL);
+
+    robot.delay(500);
+    robot.keyPress(KeyEvent.VK_ENTER);
+    robot.keyRelease(KeyEvent.VK_ENTER);
+
+    System.out.println("Nombre del archivo escrito en el diálogo de Windows.");
+}

@@ -1,0 +1,21 @@
+@When("^Agentsit navega hasta la carpeta Downloads$")
+public void navegarHastaDownloads() throws Exception {
+    String downloadsPath = System.getProperty("user.home") + "\\Downloads";
+    StringSelection ss = new StringSelection(downloadsPath);
+    Toolkit.getDefaultToolkit().getSystemClipboard().setContents(ss, null);
+
+    Robot r = new Robot();
+    r.setAutoDelay(80);
+
+    // Asegura que el diálogo reciba teclas
+    r.keyPress(KeyEvent.VK_ALT); r.keyRelease(KeyEvent.VK_ALT);
+
+    // Alt+D -> barra de dirección
+    r.keyPress(KeyEvent.VK_ALT); r.keyPress(KeyEvent.VK_D);
+    r.keyRelease(KeyEvent.VK_D); r.keyRelease(KeyEvent.VK_ALT);
+
+    // Ctrl+V y Enter
+    r.keyPress(KeyEvent.VK_CONTROL); r.keyPress(KeyEvent.VK_V);
+    r.keyRelease(KeyEvent.VK_V); r.keyRelease(KeyEvent.VK_CONTROL);
+    r.keyPress(KeyEvent.VK_ENTER); r.keyRelease(KeyEvent.VK_ENTER);
+}

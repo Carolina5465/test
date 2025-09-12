@@ -1,0 +1,141 @@
+// arriba en tu clase
+private static java.nio.file.Path LAST_XML_GENERADO;
+
+@When("^Agentsit\\s+Actualizo\\s+XML\\s+\"([^\"]+)\"\\s+con\\s+nombre\\s+de\\s+(\\$\\w+)$")
+public void actualizoXmlGenerandoNuevo(String rutaXml, String nombreParam) throws Exception {
+    System.out.println("==[XML Update]==");
+    System.out.println("Plantilla (no se sobreescribe): " + rutaXml);
+
+    // -------- 0) Asegurar que la plantilla exista (o restaurar) --------
+    Path plantillaPath = Paths.get(rutaXml);
+    if (!Files.exists(plantillaPath)) {
+        Path bak = Paths.get(rutaXml + ".bak");
+        if (Files.exists(bak)) {
+            Files.copy(bak, plantillaPath, StandardCopyOption.REPLACE_EXISTING);
+            System.out.println("Plantilla restaurada desde .bak");
+        } else {
+            throw new java.io.FileNotFoundException("No existe la plantilla: " + plantillaPath.toAbsolutePath());
+        }
+    }
+
+    // -------- 1) Leer TXT --------
+    Path txtPath = Paths.get("numeros_formularios_masivos.txt");
+    List<String> numeros = Files.readAllLines(txtPath, StandardCharsets.UTF_8);
+    numeros.removeIf(s -> s == null || s.trim().isEmpty());
+    if (numeros.isEmpty())
+        throw new IllegalStateException("El TXT está vacío: " + txtPath.toAbsolutePath());
+
+    // -------- 2) Cargar XML (PLANTILLA) --------
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(true);
+    DocumentBuilder db = dbf.newDocumentBuilder();
+    Document doc = db.parse(plantillaPath.toFile());
+    doc.getDocumentElement().normalize();
+
+    // -------- 3) XPaths --------
+    XPath xp = XPathFactory.newInstance().newXPath();
+    String XP_NUM  = "//*[local-name()='numeroDeclaracion' or local-name()='referenceNumber']";
+    String XP_FECH = "//*[local-name()='fechaDeclaracion' or local-name()='declarationDate']";
+
+    NodeList nn = (NodeList) xp.evaluate(XP_NUM,  doc, XPathConstants.NODESET);
+    NodeList nf = (NodeList) xp.evaluate(XP_FECH, doc, XPathConstants.NODESET);
+    if (nn.getLength() == 0 || nf.getLength() == 0)
+        throw new IllegalStateException("No se encontraron nodos de número o fecha en el XML.");
+
+    // ===== LÓGICA FLEXIBLE =====
+    int lenNumNodes   = nn.getLength();
+    int lenFechaNodes = nf.getLength();
+    int lenNumeros    = numeros.size();
+    int n = Math.min(Math.min(lenNumNodes, lenFechaNodes), lenNumeros);
+
+    if (n == 0) {
+        throw new IllegalStateException(
+            "No hay nada para procesar: nodos numero=" + lenNumNodes +
+            ", nodos fecha=" + lenFechaNodes + ", numeros TXT=" + lenNumeros);
+    }
+
+    String hoy = java.time.LocalDate.now().toString();
+    for (int i = 0; i < n; i++) {
+        nn.item(i).setTextContent(numeros.get(i));
+        nf.item(i).setTextContent(hoy);
+    }
+
+    // -------- 4) Resolver NOMBRE --------
+    String nombreBase = null;
+    try {
+        Object last = this.getScenarioContext().getLastStepResultVariable();
+        if (last != null) {
+            if (last.getClass().isArray()) {
+                Object first = java.lang.reflect.Array.getLength(last) > 0
+                        ? java.lang.reflect.Array.get(last, 0) : null;
+                nombreBase = first != null ? String.valueOf(first) : null;
+            } else {
+                nombreBase = String.valueOf(last);
+            }
+        }
+    } catch (Throwable ignore) { }
+    if (nombreBase == null || nombreBase.trim().isEmpty()) {
+        try {
+            String key = (nombreParam != null && nombreParam.startsWith("$")) ? nombreParam.substring(1) : nombreParam;
+            Object gcVal = GlobalContext.get(key);
+            if (gcVal == null) gcVal = GlobalContext.get(nombreParam);
+            nombreBase = (gcVal != null) ? String.valueOf(gcVal) : null;
+        } catch (Throwable ignore) { }
+    }
+    if (nombreBase == null || nombreBase.trim().isEmpty())
+        throw new IllegalStateException("No pude resolver el nombre capturado. Ejecuta antes 'read text ... into "
+                + nombreParam + "'.");
+
+    // ===== 4.b) Construir nombre especial =====
+    String base = nombreBase.trim();
+    String baseSinExt = base.replaceFirst("(?i)\\.xml$", "");
+    String ultimaParte = baseSinExt.contains("_")
+            ? baseSinExt.substring(baseSinExt.lastIndexOf('_') + 1)
+            : baseSinExt;
+
+    baseSinExt = java.text.Normalizer.normalize(baseSinExt, java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}+", "")
+            .replaceAll("[^A-Za-z0-9._-]", "_")
+            .replaceFirst("^_+", "");
+    ultimaParte = java.text.Normalizer.normalize(ultimaParte, java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}+", "")
+            .replaceAll("[^A-Za-z0-9._-]", "_")
+            .replaceFirst("^_+", "");
+
+    String ext = ".xml";
+    Path dir = (plantillaPath.getParent() == null) ? Paths.get(".") : plantillaPath.getParent();
+    String nombreFinal = baseSinExt + "_0001";
+    if (!ultimaParte.isEmpty()) {
+        nombreFinal += "_" + ultimaParte;
+    }
+    nombreFinal += ext;
+
+    Path destino = dir.resolve(nombreFinal);
+
+    System.out.println("Archivo final (se sobrescribe si ya existe): " + destino.toAbsolutePath());
+
+    // -------- 5) Guardar el XML MODIFICADO --------
+    Transformer tf = TransformerFactory.newInstance().newTransformer();
+    tf.setOutputProperty(OutputKeys.INDENT, "yes");
+    tf.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+    tf.transform(new javax.xml.transform.dom.DOMSource(doc),
+                 new javax.xml.transform.stream.StreamResult(destino.toFile()));
+
+    // -------- 6) Guardar referencia al último XML y copiar SOLO EL NOMBRE al portapapeles --------
+    LAST_XML_GENERADO = destino;
+    String soloNombre = destino.getFileName().toString();
+    java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+            new java.awt.datatransfer.StringSelection(soloNombre), null);
+
+    // (Opcional) mantener/actualizar .bak de la plantilla
+    try {
+        Files.copy(plantillaPath, Paths.get(rutaXml + ".bak"), StandardCopyOption.REPLACE_EXISTING);
+    } catch (Exception ex) {
+        System.out.println("No se pudo crear backup de la plantilla (continuo): " + ex.getMessage());
+    }
+
+    System.out.println("Plantilla intacta: " + plantillaPath.toAbsolutePath());
+    System.out.println("Nuevo XML generado: " + destino.toAbsolutePath());
+    System.out.println("Fecha aplicada: " + hoy + " | Nodos actualizados: " + n);
+    System.out.println("Nombre copiado al portapapeles: " + soloNombre);
+}

@@ -1,0 +1,27 @@
+@When("^Agentsit escribe el nombre del archivo y confirma$")
+public void escribirNombreArchivoYConfirmar() throws Exception {
+    if (LAST_XML_GENERADO == null) {
+        throw new IllegalStateException("No hay XML generado previamente (LAST_XML_GENERADO es null).");
+    }
+    // Reponer el portapapeles con SOLO el nombre
+    String soloNombre = LAST_XML_GENERADO.getFileName().toString();
+    java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+            new java.awt.datatransfer.StringSelection(soloNombre), null);
+
+    java.awt.Robot r = new java.awt.Robot();
+    r.setAutoDelay(80);
+
+    // Foco en "File name": Alt+N (si no funciona en tu localización, usa 2–3 TAB)
+    r.keyPress(java.awt.event.KeyEvent.VK_ALT); r.keyPress(java.awt.event.KeyEvent.VK_N);
+    r.keyRelease(java.awt.event.KeyEvent.VK_N); r.keyRelease(java.awt.event.KeyEvent.VK_ALT);
+
+    // Limpiar el campo: Ctrl+A, Supr
+    r.keyPress(java.awt.event.KeyEvent.VK_CONTROL); r.keyPress(java.awt.event.KeyEvent.VK_A);
+    r.keyRelease(java.awt.event.KeyEvent.VK_A); r.keyRelease(java.awt.event.KeyEvent.VK_CONTROL);
+    r.keyPress(java.awt.event.KeyEvent.VK_DELETE); r.keyRelease(java.awt.event.KeyEvent.VK_DELETE);
+
+    // Pegar el NOMBRE y confirmar
+    r.keyPress(java.awt.event.KeyEvent.VK_CONTROL); r.keyPress(java.awt.event.KeyEvent.VK_V);
+    r.keyRelease(java.awt.event.KeyEvent.VK_V); r.keyRelease(java.awt.event.KeyEvent.VK_CONTROL);
+    r.keyPress(java.awt.event.KeyEvent.VK_ENTER); r.keyRelease(java.awt.event.KeyEvent.VK_ENTER);
+}

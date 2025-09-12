@@ -1,0 +1,61 @@
+import java.awt.Robot;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
+import java.awt.event.KeyEvent;
+
+public class DialogFileRobot {
+
+    private final Robot robot;
+
+    public DialogFileRobot() throws Exception {
+        this.robot = new Robot();
+        this.robot.setAutoDelay(220); // ajusta si tu VM es más lenta (300–400)
+    }
+
+    // ====== Helpers ======
+    private void paste(String text) {
+        Toolkit.getDefaultToolkit().getSystemClipboard()
+                .setContents(new StringSelection(text), null);
+        robot.keyPress(KeyEvent.VK_CONTROL);
+        robot.keyPress(KeyEvent.VK_V);
+        robot.keyRelease(KeyEvent.VK_V);
+        robot.keyRelease(KeyEvent.VK_CONTROL);
+    }
+
+    private void pressAltN() { // suele enfocar "File name" en Windows ES
+        robot.keyPress(KeyEvent.VK_ALT);
+        robot.keyPress(KeyEvent.VK_N);
+        robot.keyRelease(KeyEvent.VK_N);
+        robot.keyRelease(KeyEvent.VK_ALT);
+    }
+
+    // ====== Acción 1: ir a una carpeta (barra superior) ======
+    public void goToFolder(String folderPath) {
+        // Foco en barra de direcciones (Ctrl+L es muy fiable; Alt+D también vale)
+        robot.keyPress(KeyEvent.VK_CONTROL);
+        robot.keyPress(KeyEvent.VK_L);
+        robot.keyRelease(KeyEvent.VK_L);
+        robot.keyRelease(KeyEvent.VK_CONTROL);
+
+        paste(folderPath);
+
+        robot.keyPress(KeyEvent.VK_ENTER);
+        robot.keyRelease(KeyEvent.VK_ENTER);
+    }
+
+    // ====== Acción 2: escribir nombre de archivo y abrir ======
+    public void typeFileNameAndOpen(String fileName) {
+        // Intentar enfocar el cajón "File name"
+        pressAltN();
+        robot.delay(150);
+
+        // Fallback: 2 TABs por si la tecla aceleradora cambia
+        robot.keyPress(KeyEvent.VK_TAB); robot.keyRelease(KeyEvent.VK_TAB);
+        robot.keyPress(KeyEvent.VK_TAB); robot.keyRelease(KeyEvent.VK_TAB);
+
+        paste(fileName);
+
+        robot.keyPress(KeyEvent.VK_ENTER);
+        robot.keyRelease(KeyEvent.VK_ENTER);
+    }
+}

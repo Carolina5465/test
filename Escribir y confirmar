@@ -1,0 +1,20 @@
+@When("^Agentsit escribe el nombre del archivo y confirma$")
+public void escribirNombreArchivoYConfirmar() throws Exception {
+    // Asegura que el diálogo esté activo
+    Robot r = new Robot();
+    r.setAutoDelay(80);
+
+    // Alt+N -> foco en "File name"
+    r.keyPress(KeyEvent.VK_ALT); r.keyPress(KeyEvent.VK_N);
+    r.keyRelease(KeyEvent.VK_N); r.keyRelease(KeyEvent.VK_ALT);
+
+    // Limpia el campo por si hay texto previo: Ctrl+A y Supr
+    r.keyPress(KeyEvent.VK_CONTROL); r.keyPress(KeyEvent.VK_A);
+    r.keyRelease(KeyEvent.VK_A); r.keyRelease(KeyEvent.VK_CONTROL);
+    r.keyPress(KeyEvent.VK_DELETE); r.keyRelease(KeyEvent.VK_DELETE);
+
+    // Pega el nombre (ya en portapapeles) y Enter
+    r.keyPress(KeyEvent.VK_CONTROL); r.keyPress(KeyEvent.VK_V);
+    r.keyRelease(KeyEvent.VK_V); r.keyRelease(KeyEvent.VK_CONTROL);
+    r.keyPress(KeyEvent.VK_ENTER); r.keyRelease(KeyEvent.VK_ENTER);
+}

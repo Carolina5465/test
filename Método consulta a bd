@@ -1,0 +1,32 @@
+@When("^(\\w+) realiza una consulta simple con el primer número del archivo$")
+public void consultaConPrimerNumeroArchivo(String varName) throws Exception {
+
+    // 1. Leer primer número del archivo
+    Path path = Paths.get("src/test/resources/data/numeros_formularios_masivos.txt"); // ajusta la ruta
+    String numeroFormulario = Files.readAllLines(path, StandardCharsets.UTF_8)
+                                   .stream()
+                                   .map(String::trim)
+                                   .filter(s -> !s.isEmpty())
+                                   .findFirst()
+                                   .orElseThrow(() -> new Exception("El archivo está vacío"));
+
+    System.out.println("[INFO] Número leído del archivo: " + numeroFormulario);
+
+    // 2. Armar consulta
+    String sql = "SELECT estado, secuencia FROM BACE1.VTA_IMPORT_OBLIGS " +
+                 "WHERE DID_NUM_DEC_117C LIKE '%" + numeroFormulario + "%'";
+
+    System.out.println("[INFO] Ejecutando consulta: " + sql);
+
+    // 3. Ejecutar consulta
+    Agent dbAgent = (Agent) AgentManager.getInstance().getConcreteAgent("getConcreteName"); // ajusta el nombre
+    StepsResult result = dbAgent.runWithResult("db.query", new Object[]{sql});
+
+    // 4. Validar que exista resultado
+    if (result == null || result.getRows().isEmpty()) {
+        throw new AssertionError("No se encontró registro para el número: " + numeroFormulario);
+    }
+
+    // 5. Guardar en contexto (opcional)
+    GlobalContext.getScenarioContext().saveLastStepResult(result, varName);
+}

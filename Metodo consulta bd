@@ -1,0 +1,52 @@
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
+import java.util.Objects;
+import java.util.stream.Stream;
+import java.util.Map;
+import java.util.List;
+
+@When("^(.*) realiza una consulta para IF OK BOR$")
+public void numeroFormularioOKBOR(String varName) throws Exception {
+
+    // 1) Leer el PRIMER número del archivo (ignora líneas vacías/espacios)
+    Path file = Paths.get("src/test/resources/data/numeros_formularios_masivos.txt"); // <-- AJUSTA RUTA
+    String numero = null;
+    try (Stream<String> lines = Files.lines(file, StandardCharsets.UTF_8)) {
+        numero = lines
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("El archivo está vacío: " + file));
+    }
+
+    // (opcional) Guardarlo en el contexto si lo usas luego con ese varName
+    GlobalContext.getScenarioContext().saveLastStepResult(numero, varName);
+
+    // 2) Preparar SQL usando LIKE con comodines alrededor del número
+    String sql = "SELECT estado, secuencia " +
+                 "FROM BACE1.VTA_IMPORT_OBLIGS " +
+                 "WHERE DID_NUM_DEC_117C LIKE ?";
+
+    System.out.println("Ejecutando consulta con número: " + numero);
+
+    // 3) Ejecutar la consulta con parámetro
+    Agent dbAgent = (Agent) AgentManager.getInstance().getConcreteAgent("getConcreteName"); // <-- AJUSTA SI APLICA
+    StepsResult result = dbAgent.runWithResult("db.query", new Object[]{ sql, "%" + numero + "%" });
+
+    // 4) Validaciones mínimas
+    List<Map<String, Object>> rows = result.getRows();
+    if (rows == null || rows.isEmpty()) {
+        throw new AssertionError("No se encontraron registros para el número: " + numero);
+    }
+
+    // (opcional) Validar estado esperado (ej.: OK o BOR)
+    String estado = Objects.toString(rows.get(0).get("estado"), "");
+    if (!estado.equals("OK") && !estado.equals("BOR")) {
+        throw new AssertionError("Estado inesperado para " + numero + ": " + estado);
+    }
+
+    // (opcional) Guardar estado si lo necesitas después
+    GlobalContext.getScenarioContext().save("estadoConsulta", estado);
+}

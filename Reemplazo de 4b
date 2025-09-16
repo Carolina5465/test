@@ -1,0 +1,32 @@
+// Nombre base crudo (lo que viene del localizador)
+String raw = nombreBase.trim();
+
+// 1) Quitar SIEMPRE la extensión .xml del final si la trae
+String noExt = raw.replaceFirst("(?i)\\.xml$", "");
+
+// 2) Ahora divide entre prefijo e identificador derecho
+int idx = noExt.lastIndexOf('_');
+String left  = (idx >= 0) ? noExt.substring(0, idx)   : noExt;
+String right = (idx >= 0) ? noExt.substring(idx + 1) : "";
+
+// Limpieza básica (opcional como ya lo tenías)
+java.util.function.Function<String,String> clean = s ->
+    java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+        .replaceAll("\\p{M}+", "")
+        .replaceAll("[^A-Za-z0-9._-]", "_")
+        .replaceAll("_+", "_")
+        .replaceFirst("^_+", "")
+        .replaceFirst("_+$", "");
+
+// Limpiar ambas partes
+left  = clean.apply(left);
+right = clean.apply(right);
+
+// 3) Construcción final SIN duplicar .xml
+String nombreFinal = left + "_0001" + (right.isEmpty() ? "" : "_" + right) + ".xml";
+
+// 4) Generar la ruta destino
+Path dir = (plantillaPath.getParent() == null) ? Paths.get(".") : plantillaPath.getParent();
+Path destino = dir.resolve(nombreFinal);
+
+System.out.println("Archivo final = " + destino.toAbsolutePath());

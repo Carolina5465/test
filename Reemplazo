@@ -1,0 +1,38 @@
+// ===== 4.b) Nombre robusto: sin duplicados ni ".xml" intermedio =====
+String raw = nombreBase.trim();
+
+// Quitar la extensión final si ya viene
+String noExt = raw.replaceFirst("(?i)\\.xml$", "");
+
+// Dividir en prefijo (izquierda) y última parte (derecha) por el último "_"
+int idx = noExt.lastIndexOf('_');
+String left  = (idx >= 0) ? noExt.substring(0, idx)   : noExt;
+String right = (idx >= 0) ? noExt.substring(idx + 1) : "";
+
+// Por si “right” viniera con .xml pegado
+right = right.replaceFirst("(?i)\\.xml$", "");
+
+// Función para sanear
+java.util.function.Function<String,String> clean = s ->
+    java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+        .replaceAll("\\p{M}+", "")
+        .replaceAll("[^A-Za-z0-9._-]", "_")
+        .replaceAll("_+", "_")
+        .replaceFirst("^_+", "")
+        .replaceFirst("_+$", "");
+
+// Limpiar ambas partes
+left  = clean.apply(left);
+right = clean.apply(right);
+
+// Si el prefijo ya termina en "_dddd" (ej: _0001), elimínalo para reponer _0001 estándar
+left = left.replaceFirst("_(\\d{4})$", "");
+
+// Construcción final: <prefijo>_0001_<ultimaParte>.xml (sin duplicados)
+String nombreFinal = left + "_0001" + (right.isEmpty() ? "" : "_" + right) + ".xml";
+
+// Carpeta destino (misma carpeta de la plantilla)
+java.nio.file.Path dir = (plantillaPath.getParent() == null) ? java.nio.file.Paths.get(".") : plantillaPath.getParent();
+java.nio.file.Path destino = dir.resolve(nombreFinal);
+
+System.out.println("Archivo final = " + destino.toAbsolutePath());

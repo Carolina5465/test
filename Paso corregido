@@ -1,0 +1,21 @@
+// Nombre base original
+String base = nombreBase.trim();
+
+// Quitar la extensión .xml final (si la tiene)
+String sinExt = base.replaceFirst("(?i)\\.xml$", "");
+
+// Prefijo = todo antes del último "_"
+int idx = sinExt.lastIndexOf('_');
+String prefijo = (idx != -1) ? sinExt.substring(0, idx) : sinExt;
+
+// Última parte = lo que viene después del último "_"
+String ultimaParte = (idx != -1) ? sinExt.substring(idx + 1) : "";
+
+// Construcción final: prefijo + _0001 + _ultimaParte + .xml
+String nombreFinal = prefijo + "_0001" + (ultimaParte.isEmpty() ? "" : "_" + ultimaParte) + ".xml";
+
+// Carpeta destino
+Path dir = (plantillaPath.getParent() == null) ? Paths.get(".") : plantillaPath.getParent();
+Path destino = dir.resolve(nombreFinal);
+
+System.out.println("Archivo final = " + destino.toAbsolutePath());

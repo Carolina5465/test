@@ -1,0 +1,27 @@
+// === 4.b) Construcción del nombre final ===
+String raw = nombreBase.trim();
+System.out.println("RAW (extraído): " + raw);
+
+// Quitar la extensión .xml si ya viene incluida
+String noExt = raw.replaceFirst("(?i)\\.xml$", "");
+System.out.println("Después de quitar .xml: " + noExt);
+
+// Dividir en prefijo y la última parte después del "_"
+int idx = noExt.lastIndexOf("_");
+String left = (idx > 0) ? noExt.substring(0, idx) : noExt;
+String right = (idx > 0) ? noExt.substring(idx + 1) : "";
+System.out.println("LEFT: " + left);
+System.out.println("RIGHT: " + right);
+
+// Por si el RIGHT todavía tiene .xml pegado
+right = right.replaceFirst("(?i)\\.xml$", "");
+System.out.println("RIGHT limpio: " + right);
+
+// Limpieza de caracteres raros (igual que antes)
+java.util.function.Function<String,String> clean = s ->
+        java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+                .replaceAll("[^A-Za-z0-9_\\-]", "");
+
+// Construcción final del nombre
+String nombreFinal = clean.apply(left) + "_0001_" + clean.apply(right) + ".xml";
+System.out.println("NOMBRE FINAL: " + nombreFinal);

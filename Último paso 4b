@@ -1,0 +1,41 @@
+// === 4.b) Nombre robusto ===
+String raw = nombreBase.trim();
+
+// Quitar extensión final si ya viene (por seguridad)
+String noExt = raw.replaceFirst("(?i)\\.xml$", "");
+
+// Dividir en prefijo (izquierda) y última parte (derecha) por el último "_"
+int idx = noExt.lastIndexOf("_");
+String left  = (idx >= 0) ? noExt.substring(0, idx) : noExt;
+String right = (idx >= 0) ? noExt.substring(idx + 1) : "";
+
+// Limpieza general (acentos, caracteres no válidos, guiones bajos extras)
+java.util.function.Function<String,String> clean = s ->
+        java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")            // quitar tildes
+                .replaceAll("[^A-Za-z0-9_-]", "")     // solo letras, números, _ y -
+                .replaceFirst("^_+", "")              // quitar guiones bajos al inicio
+                .replaceFirst("_+$", "");             // quitar guiones bajos al final
+
+String baseClean  = clean.apply(left);
+String rightClean = clean.apply(right);
+
+// --- NUEVO: quitar 'xml' o '_xml' residuales (sin punto) ---
+baseClean  = baseClean.replaceFirst("(?i)_?xml$", "");
+rightClean = rightClean.replaceFirst("(?i)_?xml$", "");
+
+// Construcción final del nombre
+String nombreFinal = baseClean 
+                   + "_0001" 
+                   + (rightClean.isEmpty() ? "" : "_" + rightClean) 
+                   + ".xml";
+
+// DEBUG en consola
+System.out.println("RAW: " + raw);
+System.out.println("LEFT: " + baseClean);
+System.out.println("RIGHT: " + rightClean);
+System.out.println("NOMBRE FINAL: " + nombreFinal);
+
+// Definir carpeta de destino
+Path dir = (plantillaPath.getParent() == null) ? Paths.get(".") : plantillaPath.getParent();
+Path destino = dir.resolve(nombreFinal);

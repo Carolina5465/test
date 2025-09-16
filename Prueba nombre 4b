@@ -1,0 +1,48 @@
+// === 4.b) Construcción del nombre final (ajustado) ===
+String raw = nombreBase.trim();
+System.out.println("RAW (extraído): " + raw);
+
+// Quitar cualquier '.xml' (con o sin punto, guion, espacio, etc.)
+String noExt = raw.replaceFirst("(?i)([._\\s-]?xml)+$", "");
+System.out.println("Después de quitar xml: " + noExt);
+
+// Dividir en prefijo y última parte por el último "_"
+int idx = noExt.lastIndexOf('_');
+String left  = (idx > 0) ? noExt.substring(0, idx) : noExt;
+String right = (idx > 0) ? noExt.substring(idx + 1) : "";
+System.out.println("LEFT  (antes): " + left);
+System.out.println("RIGHT (antes): " + right);
+
+// Asegurar que ninguna parte termine en xml residual
+left  = left.replaceFirst("(?i)([._\\s-]?xml)+$", "").trim();
+right = right.replaceFirst("(?i)([._\\s-]?xml)+$", "").trim();
+System.out.println("LEFT  limpio: " + left);
+System.out.println("RIGHT limpio: " + right);
+
+// Si right ya empieza con "0001", no lo dupliques
+if (right.startsWith("0001")) {
+    right = right.substring(4); // quita el 0001 inicial
+    if (right.startsWith("_")) {
+        right = right.substring(1); // quita "_" extra si quedó
+    }
+}
+System.out.println("RIGHT ajustado: " + right);
+
+// Limpieza general de caracteres (acentos, símbolos raros)
+java.util.function.Function<String,String> clean = s ->
+        java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .replaceAll("[^A-Za-z0-9_-]", "")
+                .replaceFirst("^_+", "")       // quitar '_' iniciales
+                .replaceFirst("_+$", "");      // quitar '_' finales
+
+String baseClean  = clean.apply(left);
+String rightClean = clean.apply(right);
+
+// Construcción final
+String nombreFinal = baseClean + "_0001" + (rightClean.isEmpty() ? "" : "_" + rightClean) + ".xml";
+System.out.println("NOMBRE FINAL: " + nombreFinal);
+
+// Directorio de salida y Path destino
+Path dir = (plantillaPath.getParent() == null) ? Paths.get(".") : plantillaPath.getParent();
+Path destino = dir.resolve(nombreFinal);

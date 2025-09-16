@@ -1,0 +1,20 @@
+// Limpieza general (acentos y símbolos)
+java.util.function.Function<String,String> clean = s ->
+        java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .replaceAll("[^A-Za-z0-9_-]", "")
+                .replaceFirst("^_+", "")   // quita '_' iniciales
+                .replaceFirst("_+$", "");  // quita '_' finales
+
+String baseClean  = clean.apply(left);
+String rightClean = clean.apply(right);
+
+// --- NUEVO: quita 'xml' o '_xml' residuales al final (sin punto) ---
+baseClean  = baseClean.replaceFirst("(?i)_?xml$", "");
+rightClean = rightClean.replaceFirst("(?i)_?xml$", "");
+
+// Construcción final (evita duplicar 0001; ya lo trataste arriba)
+String nombreFinal = baseClean + "_0001" + (rightClean.isEmpty() ? "" : "_" + rightClean) + ".xml";
+System.out.println("NOMBRE FINAL: " + nombreFinal);
+Path dir = (plantillaPath.getParent() == null) ? Paths.get(".") : plantillaPath.getParent();
+Path destino = dir.resolve(nombreFinal);

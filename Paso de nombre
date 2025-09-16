@@ -1,0 +1,31 @@
+// ===== 4.b) Construir nombre especial =====
+String base = nombreBase.trim();
+
+// Quitar .xml final (admite espacios finales) y, por si acaso,
+// eliminar cualquier ".xml" que venga en medio
+String baseSinExt = base
+        .replaceFirst("(?i)\\.xml\\s*$", "")   // quita .xml al final (case-insensitive)
+        .replaceAll("(?i)\\.xml", "");        // por si viene .xml en medio
+
+// Tomar la última parte después del último "_"
+String ultimaParte = baseSinExt.contains("_")
+        ? baseSinExt.substring(baseSinExt.lastIndexOf('_') + 1)
+        : baseSinExt;
+
+// Asegurar que la última parte NO traiga .xml
+ultimaParte = ultimaParte.replaceFirst("(?i)\\.xml$", "");
+
+// Sanear
+baseSinExt = java.text.Normalizer.normalize(baseSinExt, java.text.Normalizer.Form.NFD)
+        .replaceAll("\\p{M}+", "")
+        .replaceAll("[^A-Za-z0-9._-]", "_")
+        .replaceFirst("^_+", "");
+ultimaParte = java.text.Normalizer.normalize(ultimaParte, java.text.Normalizer.Form.NFD)
+        .replaceAll("\\p{M}+", "")
+        .replaceAll("[^A-Za-z0-9._-]", "_")
+        .replaceFirst("^_+", "");
+
+// Construcción sin “_” colgantes y con UNA sola extensión al final
+String nombreFinal = baseSinExt + "_0001" + (ultimaParte.isEmpty() ? "" : "_" + ultimaParte) + ".xml";
+java.nio.file.Path dir = (plantillaPath.getParent() == null) ? java.nio.file.Paths.get(".") : plantillaPath.getParent();
+java.nio.file.Path destino = dir.resolve(nombreFinal);

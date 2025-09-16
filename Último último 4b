@@ -1,0 +1,45 @@
+// === 4.b) Nombre robusto (ajuste anti-duplicados de 0001) ===
+String raw = nombreBase.trim();
+
+// Quitar extensión final si ya viene
+String noExt = raw.replaceFirst("(?i)\\.xml$", "");
+
+// Dividir en prefijo (izquierda) y última parte (derecha)
+int idx = noExt.lastIndexOf("_");
+String left  = (idx >= 0) ? noExt.substring(0, idx) : noExt;
+String right = (idx >= 0) ? noExt.substring(idx + 1) : "";
+
+// Limpieza general
+java.util.function.Function<String,String> clean = s ->
+        java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .replaceAll("[^A-Za-z0-9_-]", "")
+                .replaceFirst("^_+", "")
+                .replaceFirst("_+$", "");
+
+String baseClean  = clean.apply(left);
+String rightClean = clean.apply(right);
+
+// Quitar residuos 'xml' sin punto
+baseClean  = baseClean.replaceFirst("(?i)_?xml$", "");
+rightClean = rightClean.replaceFirst("(?i)_?xml$", "");
+
+// *** NUEVO: evitar 0001 duplicado ***
+baseClean  = baseClean.replaceFirst("(?i)_0001$", "");   // si el prefijo termina en _0001
+rightClean = rightClean.replaceFirst("(?i)^0001_?", ""); // si la derecha empieza con 0001 (con o sin _)
+
+// Construcción final
+String nombreFinal = baseClean
+        + "_0001"
+        + (rightClean.isEmpty() ? "" : "_" + rightClean)
+        + ".xml";
+
+// DEBUG opcional
+System.out.println("RAW: " + raw);
+System.out.println("LEFT (clean): " + baseClean);
+System.out.println("RIGHT (clean): " + rightClean);
+System.out.println("NOMBRE FINAL: " + nombreFinal);
+
+// Destino
+Path dir = (plantillaPath.getParent() == null) ? Paths.get(".") : plantillaPath.getParent();
+Path destino = dir.resolve(nombreFinal);

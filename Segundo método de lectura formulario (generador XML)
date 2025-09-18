@@ -1,0 +1,43 @@
+@When("^(\\w+) capturo el numero indicador del formulario \"([^\"]+)\"$")
+public void capturoFormularioDesdeTXT(String agentName, String varName) throws Exception {
+
+    // 1) Leer el número base desde el TXT
+    Path path = Paths.get("src","test","resources","data","numeros_formularios_generadorXML.txt");
+    String contenido = Files.readString(path, StandardCharsets.UTF_8);
+    Matcher m = Pattern.compile("(\\d{5,})");      // toma el primer bloque de ≥5 dígitos
+    if (!m.find()) throw new Exception("No se encontró número en: " + path);
+    String numeroBuscado = m.group(1).replaceAll("\\D","");  // solo dígitos
+
+    // 2) XPath: fila que contiene el número buscado -> columna "Formulario"
+    // En tu tabla "Formulario" es la penúltima celda: td[last()-1]
+    String xpathFormulario =
+        "//table//tbody//tr[td[translate(normalize-space(.),' .,-/','')='" + numeroBuscado + "']]"
+      + "/td[last()-1]";
+
+    System.out.println("[capturoFormularioDesdeTXT] buscando: " + numeroBuscado);
+    System.out.println("[capturoFormularioDesdeTXT] xpath: " + xpathFormulario);
+
+    // 3) Usar TU agente (como en tus ejemplos) para obtener el texto
+    Agentismanager agentManager = Agentismanager.getInstance();
+    Agent agent = agentManager.getOrCreateAgent(agentName);
+
+    // Si tu método para leer texto se llama distinto, cambia "getText" por:
+    // "getControlText" o "getTextByXpath" o "getAttribute" con "textContent".
+    String methodName = "getText";
+    StepResult result = agent.run(methodName, new Object[]{ xpathFormulario });
+
+    // Mantener el patrón de tus steps: guardar y leer el primer valor del resultado
+    Object first = getScenarioContext().saveLastStepResult(result).getFirst();
+    String textoCelda = String.valueOf(first).trim();  // debería ser "3" en tu ejemplo
+
+    // 4) Guardar en GlobalContext la variable pedida
+    GlobalContext.set(varName, textoCelda);
+
+    System.out.println("[capturoFormularioDesdeTXT] numero buscado=" + numeroBuscado
+            + " | formulario=" + textoCelda);
+
+    // (Opcional) si el método anterior no devuelve texto:
+    // StepResult r2 = agent.run("getAttribute", new Object[]{ xpathFormulario, "textContent" });
+    // textoCelda = String.valueOf(getScenarioContext().saveLastStepResult(r2).getFirst()).trim();
+    // GlobalContext.set(varName, textoCelda);
+}

@@ -1,0 +1,22 @@
+@When("^capturoFormularioDesdeTXT$")
+public void capturoFormularioDesdeTXT() throws Exception {
+    // 1) Leer número base desde TXT (ajusta la ruta)
+    Path path = Paths.get("src","test","resources","data","numeros_formularios_generadorXML.txt");
+    String contenido = Files.readString(path, StandardCharsets.UTF_8);
+    Matcher m = Pattern.compile("(\\d{5,})").matcher(contenido);
+    if (!m.find()) throw new Exception("No se encontró número en: " + path);
+    String numeroBuscado = m.group(1).replaceAll("\\D",""); // solo dígitos
+
+    // 2) XPath: fila que contiene el número buscado  (normalizado)  → tomar la celda 'Formulario'
+    // 'Formulario' es la penúltima <td> de la fila (antes de 'Seleccionar'), por eso td[last()-1]
+    String xpathFormulario = "//table//tbody//tr[td[translate(normalize-space(.),' .,-/','')='"
+            + numeroBuscado + "']]/td[last()-1]";
+
+    Maker.waitForVisible(xpathFormulario, 20);
+    Maker.scrollIntoView(xpathFormulario);
+
+    // 3) Capturar y guardar
+    String formulario = Maker.getText(xpathFormulario).trim(); // e.g., "3"
+    GlobalContext.set("numeroFormulario", formulario);
+    LogJava.info("Formulario capturado para " + numeroBuscado + " => " + formulario);
+}

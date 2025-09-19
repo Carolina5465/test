@@ -1,0 +1,91 @@
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.attribute.FileTime;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.math.BigDecimal;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.w3c.dom.*;
+
+@When("^extraigoDatosDelUltimoXML de \"([^\"]+)\" con prefijo \"([^\"]+)\"$")
+public void extraigoDatosDelUltimoXML(String carpetaXml, String prefijo) throws Exception {
+
+    // 1) Ubicar XML más reciente
+    Path dir = Paths.get(carpetaXml);
+    if (!Files.isDirectory(dir)) throw new Exception("Carpeta no válida: " + dir.toAbsolutePath());
+
+    Path ultimoXml = Files.list(dir)
+        .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".xml"))
+        .max(Comparator.comparing(p -> {
+            try { return Files.getLastModifiedTime(p); } catch (Exception e) { return FileTime.fromMillis(0); }
+        }))
+        .orElseThrow(() -> new Exception("No hay XML en: " + dir.toAbsolutePath()));
+
+    System.out.println("[XML reciente] " + ultimoXml + " | fecha " + Files.getLastModifiedTime(ultimoXml));
+
+    // 2) Parsear XML
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    Document doc = dbf.newDocumentBuilder().parse(ultimoXml.toFile());
+    doc.getDocumentElement().normalize();
+
+    // 3) Tags a extraer (edita esta lista según tu XML)
+    List<String> tags = Arrays.asList(
+        "numeroDeclaracion",
+        "fechaDeclaracion",
+        "tipoOperacion",
+        "monedaNegociacion",
+        "valorTotalMonedaNegociacion",
+        "tipoDocumentoImportador",
+        "numeroDocumentoImportador",
+        "nombreImportador"
+    );
+
+    // 4) Extraer y normalizar algunos campos comunes
+    Map<String,String> valores = new LinkedHashMap<>();
+    for (String tag : tags) {
+        String val = getFirstText(doc, tag);
+        if (val == null) continue;
+        String norm = val.trim();
+
+        if ("numeroDeclaracion".equals(tag) || tag.toLowerCase().contains("numero")) {
+            // números: dejar solo dígitos (si tu XML trae separadores)
+            norm = norm.replaceAll("\\D", "");
+        }
+        if (tag.toLowerCase().contains("moneda")) {
+            norm = norm.trim().toUpperCase(Locale.ROOT);
+        }
+        if (tag.toLowerCase().contains("valor")) {
+            // valores monetarios: normalizar a formato estándar sin separadores de miles
+            norm = norm.replaceAll("[^0-9.,-]", ""); // quitar letras/espacios
+            // convertir coma a punto si viniera con coma decimal
+            if (norm.contains(",") && !norm.contains(".")) norm = norm.replace(',', '.');
+            // opcional: validar que es numérico
+            try { new BigDecimal(norm); } catch (Exception ignore) {}
+        }
+
+        valores.put(tag, norm);
+        GlobalContext.set("xml_" + prefijo + "_" + tag, norm);
+    }
+
+    // 5) Traza útil
+    String resumen = valores.entrySet().stream()
+        .map(e -> e.getKey() + "=" + e.getValue())
+        .collect(Collectors.joining(" | "));
+    System.out.println("[extraigoDatosDelUltimoXML] " + resumen);
+
+    // (Opcional) Guardar un JSON plano de respaldo en la raíz del proyecto
+    Path out = Paths.get("ultimo_xml_" + prefijo + ".json");
+    String json = "{\n" + valores.entrySet().stream()
+        .map(e -> "  \"" + e.getKey() + "\": \"" + e.getValue().replace("\"","\\\"") + "\"")
+        .collect(Collectors.joining(",\n")) + "\n}\n";
+    Files.writeString(out, json, StandardCharsets.UTF_8,
+        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+}
+
+// Helper: obtiene el texto del primer nodo <tag>
+private String getFirstText(Document doc, String tag) {
+    NodeList nl = doc.getElementsByTagName(tag);
+    if (nl == null || nl.getLength() == 0) return null;
+    return nl.item(0).getTextContent();
+}

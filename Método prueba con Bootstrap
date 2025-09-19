@@ -1,0 +1,77 @@
+@When("^(\\w+) selecciona la fecha de \"([^\"]+)\" en el input \"([^\"]+)\" usando datepicker \"([^\"]+)\"$")
+public void seleccionarFechaConDatepicker(String agentName, String varFecha, String xpathInput, String xpathDpContainer) throws Exception {
+    // 1) Tomar fecha del GlobalContext (acepta yyyy-MM-dd o yyyy/MM/dd)
+    Object raw = GlobalContext.get(varFecha);
+    if (raw == null) throw new Exception("Variable no encontrada en GlobalContext: " + varFecha);
+    String s = String.valueOf(raw).trim().replace('/', '-'); // normaliza a yyyy-MM-dd
+
+    // 2) Parse a LocalDate (yyyy-MM-dd)
+    java.time.LocalDate target = java.time.LocalDate.parse(s);
+
+    // 3) Abrir el datepicker haciendo click en el input
+    Agentismanager am = Agentismanager.getInstance();
+    Agent agent = am.getOrCreateAgent(agentName);
+    agent.run("clickControl", new Object[]{ xpathInput });
+    Thread.sleep(200);
+
+    // 4) XPaths relativos al contenedor del datepicker (Bootstrap datepicker común)
+    String xpHeader = xpathDpContainer + "//th[contains(@class,'datepicker-switch')]";
+    String xpPrev   = xpathDpContainer + "//th[contains(@class,'prev')]";
+    String xpNext   = xpathDpContainer + "//th[contains(@class,'next')]";
+    // día (evita los de otros meses: sin clases 'old' ni 'new')
+    String xpDay    = xpathDpContainer + "//td[contains(@class,'day') and " +
+                      "not(contains(@class,'old')) and not(contains(@class,'new')) and normalize-space(text())='%s']";
+
+    // 5) Leer mes/año actual del header (ej.: "Septiembre 2025")
+    String header = String.valueOf(getText(agent, xpHeader)).trim();
+    java.time.YearMonth shown = parseHeaderMonth(header); // maneja meses en español
+
+    java.time.YearMonth targetYM = java.time.YearMonth.of(target.getYear(), target.getMonthValue());
+
+    // 6) Navegar hasta llegar al mes/año objetivo
+    int guard = 0;
+    while (!shown.equals(targetYM) && guard++ < 24) { // evita loops
+        if (shown.isBefore(targetYM)) {
+            agent.run("clickControl", new Object[]{ xpNext });
+        } else {
+            agent.run("clickControl", new Object[]{ xpPrev });
+        }
+        Thread.sleep(200);
+        header = String.valueOf(getText(agent, xpHeader)).trim();
+        shown = parseHeaderMonth(header);
+    }
+
+    // 7) Click en el día
+    String xpDia = String.format(xpDay, target.getDayOfMonth());
+    agent.run("clickControl", new Object[]{ xpDia });
+    Thread.sleep(150);
+
+    GlobalContext.set("fecha_ingresada", target.toString()); // yyyy-MM-dd
+    System.out.println("[datepicker] Seleccionada " + target);
+}
+
+// ---- Helpers ----
+
+// Usa tu agente para leer texto del control
+private Object getText(Agent agent, String xpath) throws Exception {
+    // Si tu agente usa otro método (p.ej. "getControlText"), cámbialo aquí:
+    String methodName = "getText";
+    StepResult r = agent.run(methodName, new Object[]{ xpath });
+    return getScenarioContext().saveLastStepResult(r).getFirst();
+}
+
+// Parsea "Septiembre 2025" → YearMonth(2025-09) (meses en español)
+private java.time.YearMonth parseHeaderMonth(String header) {
+    String h = header.trim().toLowerCase(java.util.Locale.ROOT);
+    String[] partes = h.split("\\s+");
+    if (partes.length < 2) return java.time.YearMonth.now();
+    int year = Integer.parseInt(partes[1]);
+    int month = switch (partes[0]) {
+        case "enero" -> 1; case "febrero" -> 2; case "marzo" -> 3;
+        case "abril" -> 4; case "mayo" -> 5; case "junio" -> 6;
+        case "julio" -> 7; case "agosto" -> 8; case "septiembre","setiembre" -> 9;
+        case "octubre" -> 10; case "noviembre" -> 11; case "diciembre" -> 12;
+        default -> java.time.YearMonth.now().getMonthValue();
+    };
+    return java.time.YearMonth.of(year, month);
+}

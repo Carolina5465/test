@@ -1,0 +1,18 @@
+@When("^(\\w+) escribe la fecha de \"([^\"]+)\" en el input \"([^\"]+)\"$")
+public void escribirFechaSimple(String agentName, String varFecha, String xpathInput) throws Exception {
+    // 1) Tomar la fecha desde GlobalContext
+    Object raw = GlobalContext.get(varFecha);
+    if (raw == null) throw new Exception("No existe variable en GlobalContext: " + varFecha);
+    String fecha = String.valueOf(raw).trim(); // Ej: 2025-09-17
+
+    // 2) Usar el agente para escribir directamente
+    Agentismanager am = Agentismanager.getInstance();
+    Agent agent = am.getOrCreateAgent(agentName);
+
+    agent.run("typeTextIntoControl", new Object[]{ xpathInput, fecha });
+
+    // 3) Guardar para trazabilidad
+    System.out.println("[escribirFechaSimple] " + varFecha + " = " + fecha);
+}
+
+And Agentiist escribe la fecha de "xml_OPF_fechaDeclaracion" en el input "//*[@id='fechaCreacion']"

@@ -1,0 +1,56 @@
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.attribute.FileTime;
+import java.util.Comparator;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.w3c.dom.Document;
+
+@When("^guardoNumeroDeclaracionDelUltimoXML en ruta \"([^\"]+)\"$")
+public void guardoNumeroDeclaracionDelUltimoXML(String carpetaXml) throws Exception {
+
+    // 1) Validar carpeta
+    Path dir = Paths.get(carpetaXml);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("Carpeta no válida: " + dir.toAbsolutePath());
+    }
+
+    // 2) Tomar el XML más reciente por lastModifiedTime
+    Path ultimoXml = Files.list(dir)
+            .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".xml"))
+            .max(Comparator.comparing(p -> {
+                try { return Files.getLastModifiedTime(p); }
+                catch (Exception e) { return FileTime.fromMillis(0); }
+            }))
+            .orElseThrow(() -> new Exception("No se encontraron .xml en: " + dir.toAbsolutePath()));
+
+    System.out.println("[XML reciente] " + ultimoXml.getFileName()
+            + " | fecha: " + Files.getLastModifiedTime(ultimoXml));
+
+    // 3) Parsear y extraer <numeroDeclaracion>
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    Document doc = dbf.newDocumentBuilder().parse(ultimoXml.toFile());
+    doc.getDocumentElement().normalize();
+
+    if (doc.getElementsByTagName("numeroDeclaracion").getLength() == 0) {
+        throw new Exception("Tag <numeroDeclaracion> no encontrado en: " + ultimoXml.getFileName());
+    }
+    String numeroDeclaracion = doc.getElementsByTagName("numeroDeclaracion")
+                                  .item(0).getTextContent().trim();
+    // Normaliza a dígitos por si trae separadores
+    numeroDeclaracion = numeroDeclaracion.replaceAll("\\D", "");
+
+    if (numeroDeclaracion.isEmpty()) {
+        throw new Exception("El <numeroDeclaracion> está vacío en: " + ultimoXml.getFileName());
+    }
+
+    // 4) Guardar en TXT (en la raíz del proyecto) y en GlobalContext
+    Path outTxt = Paths.get("numeros_formularios_generadorXML.txt");
+    Files.writeString(outTxt, numeroDeclaracion, StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+    GlobalContext.set("numeroDeclaracion", numeroDeclaracion);
+
+    System.out.println("[OK] numeroDeclaracion=" + numeroDeclaracion
+            + " guardado en " + outTxt.toAbsolutePath());
+}

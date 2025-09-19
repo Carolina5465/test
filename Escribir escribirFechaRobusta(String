@@ -1,0 +1,34 @@
+@When("^(\\w+) escribe con seguridad la fecha de \"([^\"]+)\" en el input \"([^\"]+)\"$")
+public void escribirFechaRobusta(String agentName, String varFecha, String xpathInput) throws Exception {
+    // 0) Fecha de GlobalContext, convertir a yyyy/MM/dd
+    Object raw = GlobalContext.get(varFecha);
+    if (raw == null) throw new Exception("No existe variable en GlobalContext: " + varFecha);
+    String fecha = String.valueOf(raw).trim().replace("-", "/"); // 2025/09/17
+
+    Agentismanager am = Agentismanager.getInstance();
+    Agent agent = am.getOrCreateAgent(agentName);
+
+    // 1) Focus al input
+    agent.run("clickControl", new Object[]{ xpathInput });
+
+    // 2) Limpiar con CTRL+A + DELETE (ajusta nombres si tu agente usa otros)
+    try { agent.run("sendKeys", new Object[]{ xpathInput, "CTRL+A" }); } catch (Exception ignore) {}
+    try { agent.run("sendKeys", new Object[]{ xpathInput, "DELETE" }); } catch (Exception ignore) {}
+    // fallback: a veces “BACK_SPACE” limpia la máscara
+    try { agent.run("sendKeys", new Object[]{ xpathInput, "BACK_SPACE" }); } catch (Exception ignore) {}
+
+    // 3) Escribir char a char con pequeña pausa para que la máscara no ‘robe’ el foco
+    for (char c : fecha.toCharArray()) {
+        agent.run("sendKeys", new Object[]{ xpathInput, String.valueOf(c) });
+        Thread.sleep(60); // 40–80ms suele ser ideal
+    }
+
+    // 4) Enter / blur para disparar validaciones
+    try { agent.run("sendKeys", new Object[]{ xpathInput, "ENTER" }); } catch (Exception ignore) {}
+    // click afuera (elige un label seguro cerca del campo)
+    String xpathFuera = "//*[contains(@class,'panel') or contains(@class,'form')][1]";
+    try { agent.run("clickControl", new Object[]{ xpathFuera }); } catch (Exception ignore) {}
+
+    GlobalContext.set("fecha_ingresada", fecha);
+    System.out.println("[fecha segura] " + fecha);
+}

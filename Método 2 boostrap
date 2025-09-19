@@ -1,0 +1,94 @@
+// ===== IMPORTS =====
+import java.time.LocalDate;
+import java.time.YearMonth;
+
+// ===== STEP =====
+@When("^(\\w+) seleccionaFechaSimple de \"([^\"]+)\" en input \"([^\"]+)\" usando dp \"([^\"]+)\"$")
+public void seleccionarFechaSimple(String agentName, String varFecha, String xpathInput, String xpathDpContainer) throws Exception {
+    // 1) Fecha desde GlobalContext. Acepta "yyyy-MM-dd" o "yyyy/MM/dd"
+    Object raw = GlobalContext.get(varFecha);
+    if (raw == null) throw new Exception("Variable no encontrada en GlobalContext: " + varFecha);
+    String s = String.valueOf(raw).trim().replace('/', '-'); // normaliza a yyyy-MM-dd
+    LocalDate target = LocalDate.parse(s);
+    YearMonth targetYM = YearMonth.of(target.getYear(), target.getMonthValue());
+
+    // 2) Abrir datepicker
+    Agentismanager am = Agentismanager.getInstance();
+    Agent agent = am.getOrCreateAgent(agentName);
+    agent.run("clickControl", new Object[]{ xpathInput });
+    Thread.sleep(200);
+
+    // 3) XPaths relativos al contenedor del datepicker (Bootstrap-like)
+    String xpHeader = xpathDpContainer + "//th[contains(@class,'datepicker-switch')]";
+    String xpPrev   = xpathDpContainer + "//th[contains(@class,'prev')]";
+    String xpNext   = xpathDpContainer + "//th[contains(@class,'next')]";
+    String xpDayTpl = xpathDpContainer
+            + "//td[contains(@class,'day') and not(contains(@class,'old')) and not(contains(@class,'new')) and normalize-space(text())='%s']";
+
+    // 4) Leer header actual y navegar mes/año
+    String header = getTextViaAgent(agent, xpHeader);
+    YearMonth shown = parseHeaderMonthClassic(header);   // <-- sin “->”, compatible
+    int guard = 0;
+    while (!shown.equals(targetYM) && guard++ < 24) {
+        if (shown.isBefore(targetYM)) {
+            agent.run("clickControl", new Object[]{ xpNext });
+        } else {
+            agent.run("clickControl", new Object[]{ xpPrev });
+        }
+        Thread.sleep(150);
+        header = getTextViaAgent(agent, xpHeader);
+        shown = parseHeaderMonthClassic(header);
+    }
+
+    // 5) Click en el día
+    String xpDia = String.format(xpDayTpl, target.getDayOfMonth());
+    agent.run("clickControl", new Object[]{ xpDia });
+    Thread.sleep(120);
+
+    GlobalContext.set("fecha_ingresada", target.toString()); // yyyy-MM-dd
+    System.out.println("[datepicker-ok] " + target + " | header=" + header);
+}
+
+// ===== Helpers =====
+
+// Si tu agente usa "getControlText" en vez de "getText", CAMBIA el método llamado aquí:
+private String getTextViaAgent(Agent agent, String xpath) throws Exception {
+    String methodName = "getText"; // ó "getControlText"
+    StepResult r = agent.run(methodName, new Object[]{ xpath });
+    Object first = getScenarioContext().saveLastStepResult(r).getFirst();
+    return first == null ? "" : String.valueOf(first).trim();
+}
+
+// Parser “Septiembre 2025” → YearMonth(2025-09) con switch clásico (sin “->”)
+private YearMonth parseHeaderMonthClassic(String header) {
+    if (header == null) return YearMonth.now();
+    String h = header.trim().toLowerCase(java.util.Locale.ROOT); // ej: "septiembre 2025"
+    String[] partes = h.split("\\s+");
+    if (partes.length < 2) return YearMonth.now();
+    int year;
+    try { year = Integer.parseInt(partes[1].replaceAll("\\D","")); }
+    catch (Exception e) { return YearMonth.now(); }
+
+    String mesTxt = partes[0];
+    // normalizar acentos básicos
+    mesTxt = mesTxt.replace("á","a").replace("é","e").replace("í","i").replace("ó","o").replace("ú","u");
+
+    int month = 1;
+    switch (mesTxt) {
+        case "enero":       month = 1;  break;
+        case "febrero":     month = 2;  break;
+        case "marzo":       month = 3;  break;
+        case "abril":       month = 4;  break;
+        case "mayo":        month = 5;  break;
+        case "junio":       month = 6;  break;
+        case "julio":       month = 7;  break;
+        case "agosto":      month = 8;  break;
+        case "septiembre":
+        case "setiembre":   month = 9;  break;
+        case "octubre":     month = 10; break;
+        case "noviembre":   month = 11; break;
+        case "diciembre":   month = 12; break;
+        default:            month = YearMonth.now().getMonthValue();
+    }
+    return YearMonth.of(year, month);
+}

@@ -1,0 +1,90 @@
+// Mapea, arma el SQL y consulta por el número de declaración usando tu agente.
+// Guarda lo leído en GlobalContext para validarlo después.
+@When("^(\\w+) consultaFormularioEnBD usando identificador \"([^\"]+)\" y numero \"([^\"]+)\"$")
+public void consultarFormularioEnBD_Base(String agentName, String varIdentificador, String varNumDeclaracion) throws Exception {
+
+    // 1) Variables del contexto
+    Object idRaw  = GlobalContext.get(varIdentificador);
+    Object numRaw = GlobalContext.get(varNumDeclaracion);
+    if (idRaw == null)  throw new Exception("Falta variable identificador: " + varIdentificador);
+    if (numRaw == null) throw new Exception("Falta variable numeroDeclaracion: " + varNumDeclaracion);
+
+    int identificador = Integer.parseInt(String.valueOf(idRaw).trim());
+    String numeroDeclaracion = String.valueOf(numRaw).trim();
+
+    // 2) Mapeo identificador -> tabla/columnas (ajusta nombres exactos según tu BD)
+    String tabla, colNum, colFecha;
+    switch (identificador) {
+        case 1:  // IMPORT BIENES
+            tabla   = "BAC_F2VI_FOR_IMPORT_BIENES";
+            colNum  = "DIB_NUM_DEC_INITC";
+            colFecha= "DIB_FECHA_DEC_INITC";
+            break;
+        case 2:  // DECLARACIÓN EXPORT BIENES
+            tabla   = "BAC_F2VI_FOR_DECLA_EXPOR_BIEN";
+            colNum  = "DIE_NUM_DEC_INITC";
+            colFecha= "DIE_FECHA_DEC_INITC";
+            break;
+        case 3:  // ENMIENDA EXTERIOR
+            tabla   = "BAC_F2VI_FOR_ENMEDA_EXTER";
+            colNum  = "DEB_NUM_DEC_INITC";
+            colFecha= "DEB_FECHA_DEC_INITC";
+            break;
+        case 4:  // INTERNAS
+            tabla   = "BAC_F2VI_FOR_INTERNAS";
+            colNum  = "DII_NUM_DEC_INITC";
+            colFecha= "DII_FECHA_DEC_INITC";
+            break;
+        case 5:  // SERV / TRANSF / OTROS
+            tabla   = "BAC_F2VI_FOR_SERV_TRANSF_OTROS";
+            colNum  = "DST_NUM_DEC_INITC";
+            colFecha= "DST_FECHA_DEC_INITC";
+            break;
+        default:
+            throw new IllegalArgumentException("Identificador de formulario desconocido: " + identificador);
+    }
+
+    System.out.println("[INFO] id=" + identificador + " -> tabla=" + tabla + ", colNum=" + colNum + ", colFecha=" + colFecha);
+
+    // 3) SQL base (puedes agregar más columnas cuando las necesites)
+    //    Nota: si estás en Oracle vieja y no usas FETCH FIRST, omite la última línea o usa ROWNUM=1.
+    String sql =
+        "SELECT " + colNum + " AS NUM_DECLARACION, " + colFecha + " AS FECHA_DECLARACION " +
+        "FROM " + tabla + " " +
+        "WHERE " + colNum + " = '" + numeroDeclaracion + "' " +
+        "FETCH FIRST 1 ROWS ONLY";
+
+    System.out.println("[SQL] " + sql);
+
+    // 4) Ejecutar con tu agente (ajusta methodName si en tu framework es otro)
+    String methodName = "query"; // <--- cambia a "runSQL" / "executeQuery" / etc. si aplica en tu agente
+    StepResult result = Agentsmanager.getInstance()
+            .getOrCreateAgent(agentName)
+            .run(methodName, new Object[]{ sql });
+
+    // 5) Guardar resultados en GlobalContext (ajusta getters según tu result)
+    //    Si tu framework devuelve un Map, Row o similar, toma los valores como ya haces en otros pasos.
+    Object rst = getScenarioContext().saveLastStepResult(result).getFirst();
+    // Deja trazas:
+    System.out.println("[BD] Resultado crudo: " + String.valueOf(rst));
+
+    // Si tu agente expone getters por campo, puedes hacer algo tipo:
+    // String numBD   = result.getFieldValue("NUM_DECLARACION");
+    // String fechaBD = result.getFieldValue("FECHA_DECLARACION");
+
+    // Como base, guardamos el resultado completo y las claves principales:
+    GlobalContext.set("db_tabla", tabla);
+    GlobalContext.set("db_sql", sql);
+    GlobalContext.set("db_result_raw", String.valueOf(rst));
+
+    // Si tu framework tiene getFieldValue:
+    try {
+        String numBD   = result.getFieldValue("NUM_DECLARACION");
+        String fechaBD = result.getFieldValue("FECHA_DECLARACION");
+        GlobalContext.set("db_num_dec",   numBD);
+        GlobalContext.set("db_fecha_dec", fechaBD);
+        System.out.println("[BD OK] num=" + numBD + " fecha=" + fechaBD);
+    } catch (Throwable ignore) {
+        // Si no soporta getFieldValue, ya dejamos el raw guardado
+    }
+}

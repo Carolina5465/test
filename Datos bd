@@ -1,0 +1,73 @@
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+import java.util.regex.*;
+import java.util.*;
+
+@When("^(\\w+) cargaDatosOPF desde \"([^\"]+)\" y guardaNumero en \"([^\"]+)\"$")
+public void cargarDatosOPF_y_GuardarNumero(String agentName, String nombreArchivo, String rutaSalidaNumero) throws Exception {
+    // 1) Resolver ruta del archivo de datos (ajusta si tu estructura es distinta)
+    //    Ejemplo esperado: src/test/resources/data/ultimo_xml_OPF.json
+    Path ruta = Paths.get(System.getProperty("user.dir"), "src", "test", "resources", "data", nombreArchivo);
+    if (!Files.exists(ruta)) {
+        throw new Exception("No existe el archivo de datos: " + ruta.toAbsolutePath());
+    }
+
+    // 2) Leer contenido
+    String json = Files.readString(ruta, StandardCharsets.UTF_8).trim();
+    System.out.println("[OPF] Leyendo: " + ruta.toAbsolutePath());
+
+    // 3) Parsear JSON plano -> pares clave/valor
+    Map<String, String> kv = parseJsonPlano(json);
+    if (kv.isEmpty()) throw new Exception("No se extrajo información del archivo " + ruta.toAbsolutePath());
+
+    // 4) Guardar TODO en GlobalContext con prefijo xml_OPF_
+    for (Map.Entry<String, String> e : kv.entrySet()) {
+        String ctxKey = "xml_OPF_" + e.getKey();
+        GlobalContext.set(ctxKey, e.getValue());
+        System.out.println("[OPF] " + ctxKey + " = " + e.getValue());
+    }
+
+    // 5) Alias útiles (opcional)
+    if (kv.containsKey("numeroDeclaracion")) {
+        GlobalContext.set("xml_OPF_numero", kv.get("numeroDeclaracion"));
+    }
+    if (kv.containsKey("fechaDeclaracion")) {
+        // normaliza a yyyy-MM-dd (tus pantallas/BD usan ese formato)
+        String f = kv.get("fechaDeclaracion").replace('/', '-');
+        GlobalContext.set("xml_OPF_fecha", f);
+    }
+
+    // 6) Escribir numeroDeclaracion al TXT solicitado
+    String numero = kv.get("numeroDeclaracion");
+    if (numero == null || numero.isEmpty()) {
+        throw new Exception("El archivo no contiene 'numeroDeclaracion'.");
+    }
+
+    // la ruta la pasas desde el feature; puede ser relativa al proyecto o absoluta
+    Path out = Paths.get(rutaSalidaNumero);
+    // crea directorios si no existen
+    if (out.getParent() != null) Files.createDirectories(out.getParent());
+    Files.writeString(out, numero, StandardCharsets.UTF_8);
+    System.out.println("[OPF] numeroDeclaracion escrito en: " + out.toAbsolutePath());
+}
+
+/* ================= Helper: JSON plano sin librerías externas =================
+   Captura "clave":"valor" y también "clave":123 (número sin comillas).
+   Si tu JSON puede tener arrays/objetos anidados, este parser simple
+   extraerá solo el nivel superior (clave/valor).
+============================================================================= */
+private Map<String, String> parseJsonPlano(String json) {
+    Map<String, String> out = new LinkedHashMap<>();
+
+    // 1) "clave":"valor"
+    Pattern p1 = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"");
+    Matcher m1 = p1.matcher(json);
+    while (m1.find()) out.put(m1.group(1), m1.group(2));
+
+    // 2) "clave": 123  (números sin comillas)
+    Pattern p2 = Pattern.compile("\"([^\"]+)\"\\s*:\\s*([-]?[0-9]+(?:\\.[0-9]+)?)");
+    Matcher m2 = p2.matcher(json);
+    while (m2.find()) out.putIfAbsent(m2.group(1), m2.group(2));
+
+    return out;
+}

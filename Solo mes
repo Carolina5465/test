@@ -1,0 +1,38 @@
+import java.time.LocalDate;
+
+@When("^(\\w+) seleccionaSoloElMes de \"([^\"]+)\" en el input \"([^\"]+)\"$")
+public void seleccionarSoloElMes(String agentName, String varFecha, String inputLocator) throws Exception {
+    // 1) Tomar la fecha y obtener el mes (1..12)
+    Object raw = GlobalContext.get(varFecha);
+    if (raw == null) throw new Exception("Variable no encontrada en GlobalContext: " + varFecha);
+    String s = String.valueOf(raw).trim().replace('/', '-');   // yyyy-MM-dd | yyyy/MM/dd
+    int month = LocalDate.parse(s).getMonthValue();
+
+    // 2) Click que abre el calendario
+    String methodName = "clickControl_1";
+    Agentsmanager.getInstance().getOrCreateAgent(agentName)
+            .run(methodName, new Object[]{ inputLocator });
+
+    // 3) XPaths del datepicker visible y del switch a vista de meses
+    String dpVisible = "//div[contains(@class,'datepicker') and contains(@style,'display: block')]";
+    String xpSwitch  = dpVisible + "//th[contains(@class,'datepicker-switch')]";
+
+    // 4) Entrar a la vista de meses (un click al switch desde vista de días)
+    Agentsmanager.getInstance().getOrCreateAgent(agentName)
+            .run(methodName, new Object[]{ xpSwitch });
+
+    // 5) XPath del <span class='month'> del mes objetivo (soporta ES/EN, case-insensitive)
+    String[] es = {"ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"};
+    String[] en = {"jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"};
+    String esAbbr = es[month - 1], enAbbr = en[month - 1];
+
+    String xpMes = "(" + dpVisible + "//span[contains(@class,'month') and (" +
+        "starts-with(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚ','abcdefghijklmnopqrstuvwxyzáéíóú'), '" + esAbbr + "') or " +
+        "starts-with(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚ','abcdefghijklmnopqrstuvwxyzáéíóú'), '" + enAbbr + "'))])[1]";
+
+    // 6) Click al mes
+    Agentsmanager.getInstance().getOrCreateAgent(agentName)
+            .run(methodName, new Object[]{ xpMes });
+
+    System.out.println("[solo-mes] " + varFecha + " -> mes=" + month + " | xp=" + xpMes);
+}

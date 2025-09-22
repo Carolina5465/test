@@ -1,0 +1,27 @@
+import java.time.LocalDate;
+
+@When("^(\\w+) seleccionaSoloElDia de \"([^\"]+)\" abriendo con \"([^\"]+)\" en dp \"([^\"]+)\"$")
+public void seleccionarSoloElDia(String agentName, String varFecha, String xpathInput, String xpathDpContainer) throws Exception {
+    // 1) Obtener la fecha y el día
+    Object raw = GlobalContext.get(varFecha);
+    if (raw == null) throw new Exception("Variable no encontrada en GlobalContext: " + varFecha);
+    String s = String.valueOf(raw).trim().replace('/', '-');  // normaliza a yyyy-MM-dd
+    int dia = LocalDate.parse(s).getDayOfMonth();             // 1..31
+
+    // 2) Abrir el calendario (por si no está abierto)
+    Agentismanager.getInstance().getOrCreateAgent(agentName)
+            .run("clickControl", new Object[]{ xpathInput });
+    Thread.sleep(150);
+
+    // 3) XPath del día dentro del datepicker visible (evita días de otros meses)
+    String xpDia = xpathDpContainer
+        + "//td[contains(@class,'day') and not(contains(@class,'old')) and not(contains(@class,'new'))"
+        + " and normalize-space(text())='" + dia + "']";
+
+    // 4) Click en el día
+    Agentismanager.getInstance().getOrCreateAgent(agentName)
+            .run("clickControl", new Object[]{ xpDia });
+    Thread.sleep(100);
+
+    System.out.println("[solo-dia] Seleccionado día=" + dia);
+}

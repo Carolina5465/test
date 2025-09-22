@@ -1,0 +1,117 @@
+import java.time.LocalDate;
+import java.time.YearMonth;
+
+public class OperationsFormsBaca extends BaseCommonStepdefs {
+
+    @When("^(\\w+) seleccionaFechaSimple de \"([^\"]+)\" en input \"([^\"]+)\" usando dp \"([^\"]+)\"$")
+    public void seleccionarFechaSimple(String agentName, String varFecha, String xpathInput, String xpathDpContainer) throws Exception {
+        // 1) Tomar la fecha desde GlobalContext
+        Object raw = GlobalContext.get(varFecha);
+        if (raw == null) throw new Exception("Variable no encontrada en GlobalContext: " + varFecha);
+        String s = String.valueOf(raw).trim().replace('/', '-');  // normaliza a yyyy-MM-dd
+        LocalDate target = LocalDate.parse(s);
+        YearMonth targetYM = YearMonth.of(target.getYear(), target.getMonthValue());
+
+        // 2) Abrir el datepicker
+        click(agentName, xpathInput);
+        Thread.sleep(150);
+
+        // 3) XPaths relativos al contenedor del datepicker
+        String xpHeader = xpathDpContainer + "//th[contains(@class,'datepicker-switch')]";
+        String xpPrev   = xpathDpContainer + "//th[contains(@class,'prev')]";
+        String xpNext   = xpathDpContainer + "//th[contains(@class,'next')]";
+        String xpDayTpl = xpathDpContainer
+                + "//td[contains(@class,'day') and not(contains(@class,'old')) and not(contains(@class,'new')) and normalize-space(text())='%s']";
+
+        // 4) Leer header actual y navegar hasta el mes/año objetivo
+        String header = getText(agentName, xpHeader);
+        YearMonth shown = parseHeaderMonthClassic(header);
+
+        int guard = 0;
+        while (!shown.equals(targetYM) && guard++ < 24) { // evita loops
+            if (shown.isBefore(targetYM)) {
+                click(agentName, xpNext);
+            } else {
+                click(agentName, xpPrev);
+            }
+            Thread.sleep(120);
+            header = getText(agentName, xpHeader);
+            shown  = parseHeaderMonthClassic(header);
+        }
+
+        // 5) Seleccionar el día
+        String xpDia = String.format(xpDayTpl, target.getDayOfMonth());
+        click(agentName, xpDia);
+        Thread.sleep(100);
+
+        // 6) Guardar la fecha en GlobalContext
+        GlobalContext.set("fecha_ingresada", target.toString()); // yyyy-MM-dd
+        System.out.println("[datepicker-ok] target=" + target + " | header=" + header);
+    }
+
+    // ===== Helpers =====
+
+    // Click usando el agente
+    private void click(String agentName, String xpath) throws Exception {
+        Agentsmanager.getInstance()
+                .getOrCreateAgent(agentName)
+                .run("clickControl", new Object[]{ xpath });
+    }
+
+    // Obtener texto usando el agente, probando primero getControlText y luego getText
+    private String getText(String agentName, String xpath) throws Exception {
+        String[] methods = new String[] { "getControlText", "getText" };
+        for (String method : methods) {
+            try {
+                StepResult r = Agentsmanager.getInstance()
+                        .getOrCreateAgent(agentName)
+                        .run(method, new Object[]{ xpath });
+                Object first = getScenarioContext().saveLastStepResult(r).getFirst();
+                if (first != null) {
+                    return String.valueOf(first).trim();
+                }
+            } catch (Exception ignore) {
+                // Si falla, intenta con el siguiente método
+            }
+        }
+        return "";
+    }
+
+    // Parser "Septiembre 2025" -> YearMonth(2025-09), con switch clásico
+    private YearMonth parseHeaderMonthClassic(String header) {
+        if (header == null) return YearMonth.now();
+        String h = header.trim().toLowerCase(java.util.Locale.ROOT); // ej: "septiembre 2025"
+        String[] partes = h.split("\\s+");
+        if (partes.length < 2) return YearMonth.now();
+
+        int year;
+        try {
+            year = Integer.parseInt(partes[1].replaceAll("\\D", ""));
+        } catch (Exception e) {
+            return YearMonth.now();
+        }
+
+        String mesTxt = partes[0]
+                .replace("á","a").replace("é","e")
+                .replace("í","i").replace("ó","o").replace("ú","u");
+
+        int month;
+        switch (mesTxt) {
+            case "enero": month = 1; break;
+            case "febrero": month = 2; break;
+            case "marzo": month = 3; break;
+            case "abril": month = 4; break;
+            case "mayo": month = 5; break;
+            case "junio": month = 6; break;
+            case "julio": month = 7; break;
+            case "agosto": month = 8; break;
+            case "septiembre":
+            case "setiembre": month = 9; break;
+            case "octubre": month = 10; break;
+            case "noviembre": month = 11; break;
+            case "diciembre": month = 12; break;
+            default: month = YearMonth.now().getMonthValue();
+        }
+        return YearMonth.of(year, month);
+    }
+}

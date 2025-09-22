@@ -1,0 +1,96 @@
+import java.sql.*;
+import java.time.LocalDate;
+import java.util.Objects;
+
+public class OperationsFormsBaca extends BaseCommonStepdefs {
+
+    // ====== Paso: consulta la BD según identificador y número de declaración ======
+    @When("^(\\w+) consultaFormularioEnBD segun \"([^\"]+)\" y numero \"([^\"]+)\"$")
+    public void consultarFormularioEnBD(String agentName, String varIdentificador, String varNumDeclaracion) throws Exception {
+        // 1) Tomar variables del contexto
+        Object idRaw  = GlobalContext.get(varIdentificador);
+        Object numRaw = GlobalContext.get(varNumDeclaracion);
+        if (idRaw == null)  throw new Exception("Falta variable identificador: " + varIdentificador);
+        if (numRaw == null) throw new Exception("Falta variable numeroDeclaracion: " + varNumDeclaracion);
+
+        int identificador = Integer.parseInt(String.valueOf(idRaw).trim());
+        String numeroDeclaracion = String.valueOf(numRaw).trim();
+
+        Meta m = metaPorIdentificador(identificador);  // tabla + columnas
+        if (m == null) throw new IllegalArgumentException("Identificador de formulario desconocido: " + identificador);
+
+        // 2) SQL (ajusta el TOP/LIMIT/FETCH según tu versión de Oracle/DB)
+        String sql =
+            "SELECT " + m.colNum + " AS NUM_DECLARACION, " + m.colFecha + " AS FECHA_DECLARACION " +
+            "FROM " + m.tabla + " " +
+            "WHERE " + m.colNum + " = ? " +
+            "FETCH FIRST 1 ROWS ONLY";
+
+        // 3) Conexión (ajusta credenciales/URL según tu entorno)
+        String url  = System.getenv().getOrDefault("DB_URL",  "jdbc:oracle:thin:@//host:1521/ORCLPDB1");
+        String user = System.getenv().getOrDefault("DB_USER", "USER");
+        String pass = System.getenv().getOrDefault("DB_PASS", "PASS");
+
+        try (Connection cn = DriverManager.getConnection(url, user, pass);
+             PreparedStatement ps = cn.prepareStatement(sql)) {
+            ps.setString(1, numeroDeclaracion);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new Exception("No hay registros para " + numeroDeclaracion + " en " + m.tabla + " (" + m.colNum + ")");
+                }
+                String numBD   = rs.getString("NUM_DECLARACION");
+                Timestamp fts  = rs.getTimestamp("FECHA_DECLARACION");
+                String fechaBD = (fts != null) ? fts.toLocalDateTime().toLocalDate().toString() : null;
+
+                // 4) Guardar en GlobalContext para validaciones posteriores
+                GlobalContext.set("db_tabla", m.tabla);
+                GlobalContext.set("db_num_dec", numBD);
+                GlobalContext.set("db_fecha_dec", fechaBD);
+
+                System.out.println("[BD OK] " + m.tabla + " num=" + numBD + " fecha=" + fechaBD);
+            }
+        }
+    }
+
+    // ====== Mapeo identificador -> tabla/columnas (ajustado a tus capturas) ======
+    private Meta metaPorIdentificador(int id) {
+        Meta m = new Meta();
+        switch (id) {
+            case 1:
+                m.tabla   = "BAC_F2VI_FOR_IMPORT_BIENES";
+                m.colNum  = "DIB_NUM_DEC_INITC";
+                m.colFecha= "DIB_FECHA_DEC_INITC";
+                break;
+            case 2:
+                m.tabla   = "BAC_F2VI_FOR_DECLA_EXPOR_BIEN";   // confirma el nombre exacto
+                m.colNum  = "DIE_NUM_DEC_INITC";
+                m.colFecha= "DIE_FECHA_DEC_INITC";
+                break;
+            case 3:
+                m.tabla   = "BAC_F2VI_FOR_ENMEDA_EXTER";       // confirma el nombre exacto
+                m.colNum  = "DEB_NUM_DEC_INITC";
+                m.colFecha= "DEB_FECHA_DEC_INITC";
+                break;
+            case 4:
+                m.tabla   = "BAC_F2VI_FOR_INTERNAS";           // confirma el nombre exacto
+                m.colNum  = "DII_NUM_DEC_INITC";
+                m.colFecha= "DII_FECHA_DEC_INITC";
+                break;
+            case 5:
+                m.tabla   = "BAC_F2VI_FOR_SERV_TRANSF_OTROS";  // confirma el nombre exacto
+                m.colNum  = "DST_NUM_DEC_INITC";
+                m.colFecha= "DST_FECHA_DEC_INITC";
+                break;
+            default:
+                return null;
+        }
+        return m;
+    }
+
+    // POJO simple para el mapeo
+    private static class Meta {
+        String tabla;
+        String colNum;
+        String colFecha;
+    }
+}

@@ -1,0 +1,43 @@
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+import java.util.regex.*;
+
+@When("^(\\w+) consulto datos desde json \"([^\"]+)\"$")
+public void cargarJsonSimple(String agentName, String nombreArchivo) throws Exception {
+    // 1) Ruta en la raíz del proyecto
+    Path ruta = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+    if (!Files.exists(ruta)) throw new Exception("No existe el archivo: " + ruta.toAbsolutePath());
+
+    // 2) Leer contenido
+    String json = Files.readString(ruta, StandardCharsets.UTF_8);
+
+    // 3) Extraer variables (sin GlobalContext)
+    String numeroDeclaracion           = getJsonValue(json, "numeroDeclaracion");
+    String fechaDeclaracion            = getJsonValue(json, "fechaDeclaracion");
+    String tipoOperacion               = getJsonValue(json, "tipoOperacion");
+    String tipoDocumentoImportador     = getJsonValue(json, "tipoDocumentoImportador");
+    String numeroDocumentoImportador   = getJsonValue(json, "numeroDocumentoImportador");
+    String nombreImportador            = getJsonValue(json, "nombreImportador");
+    String valorTotalMonedaNegociacion = getJsonValue(json, "valorTotalMonedaNegociacion");
+
+    // 4) Imprimir resultados
+    System.out.println("[JSON] numeroDeclaracion           = " + numeroDeclaracion);
+    System.out.println("[JSON] fechaDeclaracion            = " + fechaDeclaracion);
+    System.out.println("[JSON] tipoOperacion               = " + tipoOperacion);
+    System.out.println("[JSON] tipoDocumentoImportador     = " + tipoDocumentoImportador);
+    System.out.println("[JSON] numeroDocumentoImportador   = " + numeroDocumentoImportador);
+    System.out.println("[JSON] nombreImportador            = " + nombreImportador);
+    System.out.println("[JSON] valorTotalMonedaNegociacion = " + valorTotalMonedaNegociacion);
+
+    // Aquí ya puedes usar las variables para tu consulta SQL o validaciones
+}
+
+/** Helper: obtiene "clave":"valor" o "clave":123 del JSON plano */
+private String getJsonValue(String json, String key) {
+    if (json == null) return null;
+    Matcher m1 = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"([^\"]*)\"").matcher(json);
+    if (m1.find()) return m1.group(1);
+    Matcher m2 = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*([-]?[0-9]+(?:\\.[0-9]+)?)").matcher(json);
+    if (m2.find()) return m2.group(1);
+    return null;
+}

@@ -1,0 +1,35 @@
+import utils.JsonUtils;   // importa tu clase utilitaria
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+
+public class OperationsFormsBaca extends BaseCommonStepDefs {
+
+    public void cargandoDatosOPF(String nombreArchivo, String identificador) throws Exception {
+        // 1) Ruta del archivo JSON
+        Path ruta = Path.of(System.getProperty("user.dir"), nombreArchivo);
+        if (!Files.exists(ruta)) {
+            throw new Exception("[OPF] No existe el archivo: " + ruta.toAbsolutePath());
+        }
+
+        // 2) Leer JSON como String
+        String json = Files.readString(ruta, StandardCharsets.UTF_8).trim();
+
+        // 3) Usar tu método utilitario para convertir JSON en Map dinámico
+        Map<String, String> kv = JsonUtils.parseFlatJsonToMap(json);
+
+        // 4) Imprimir todos los campos dinámicamente
+        System.out.println("[JSON] Campos leídos: " + kv.size());
+        for (Map.Entry<String, String> e : kv.entrySet()) {
+            System.out.println("[JSON] " + e.getKey() + " = " + e.getValue());
+        }
+
+        // 🔹 Si quieres usar alguno en particular:
+        String numeroDeclaracion = kv.get("numeroDeclaracion");
+        String fechaDeclaracion = kv.get("fechaDeclaracion");
+
+        System.out.println("Número Declaración = " + numeroDeclaracion);
+        System.out.println("Fecha Declaración = " + fechaDeclaracion);
+    }
+}

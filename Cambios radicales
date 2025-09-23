@@ -1,0 +1,26 @@
+@When("^(.+) consulto datos desde (\\S+) con el identificador (.+)$")
+public void cargandoDatosOPF(String agentName, String nombreArchivo, String identificador) throws Exception {
+    // 1) Ruta al archivo JSON
+    Path ruta = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+    if (!Files.exists(ruta)) {
+        throw new Exception("[OPF] No existe el archivo: " + ruta.toAbsolutePath());
+    }
+
+    // 2) Leer JSON
+    String json = Files.readString(ruta, StandardCharsets.UTF_8).trim();
+
+    // 3) Parsear dinámicamente a mapa
+    Map<String,String> kv = parseFlatJsonToMap(json);
+
+    // 4) Mostrar todo dinámico
+    System.out.println("[JSON] ---- campos leídos (" + kv.size() + ") ----");
+    for (Map.Entry<String,String> e : kv.entrySet()) {
+        System.out.println("[JSON] " + e.getKey() + " = " + String.valueOf(e.getValue()));
+    }
+
+    // 5) Guardar TODO en GlobalContext (o en el contexto que uses)
+    for (Map.Entry<String,String> e : kv.entrySet()) {
+        GlobalContext.set(e.getKey(), e.getValue());
+    }
+    GlobalContext.set("identificadorMetodoDB", identificador);
+}

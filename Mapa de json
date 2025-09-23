@@ -1,0 +1,20 @@
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import org.json.JSONObject;   // 🔹 IMPORTANTE
+
+public class OperationsFormsBaca extends BaseCommonStepDefs {
+
+    public static Map<String, String> parseFlatJsonToMap(String json) {
+        Map<String, String> map = new HashMap<>();
+        JSONObject obj = new JSONObject(json);   // ✅ ya no dará error
+        Iterator<String> keys = obj.keys();
+
+        while (keys.hasNext()) {
+            String key = keys.next();
+            Object value = obj.get(key);
+            map.put(key, value != null ? value.toString() : null);
+        }
+        return map;
+    }
+}

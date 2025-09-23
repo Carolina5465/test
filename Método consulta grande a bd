@@ -1,0 +1,125 @@
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.regex.*;
+
+public class OperationsFormsBaca extends BaseCommonStepdefs {
+
+    @When("^(\\w+) consulto datos desde \"([^\"]+)\" con el identificador \"([^\"]+)\"$")
+    public void consultoDatosDesdeOPF(String agentName, String nombreArchivo, String varIdentificador) throws Exception {
+        // -------- 1) Cargar archivo (raíz del proyecto) --------
+        Path ruta = resolvePathFromProjectRoot(nombreArchivo, true);
+        String json = Files.readString(ruta, StandardCharsets.UTF_8).trim();
+        System.out.println("[OPF] Archivo: " + ruta.toAbsolutePath());
+
+        // -------- 2) Parsear JSON plano y guardar todo en GlobalContext --------
+        Map<String, String> kv = parseJsonPlano(json);
+        if (kv.isEmpty()) throw new Exception("No se extrajo información del archivo: " + ruta.toAbsolutePath());
+        for (Map.Entry<String,String> e : kv.entrySet()) {
+            GlobalContext.set("xml_OPF_" + e.getKey(), e.getValue());
+            System.out.println("[OPF] xml_OPF_" + e.getKey() + " = " + e.getValue());
+        }
+
+        // Alias útiles
+        String numero = opt(kv.get("numeroDeclaracion"));
+        if (numero == null) throw new Exception("El archivo no contiene 'numeroDeclaracion'.");
+        GlobalContext.set("xml_OPF_numero", numero);
+
+        String fecha = opt(kv.get("fechaDeclaracion"));
+        if (fecha == null) throw new Exception("El archivo no contiene 'fechaDeclaracion'.");
+        fecha = fecha.replace('/', '-');                    // normaliza a yyyy-MM-dd
+        GlobalContext.set("xml_OPF_fecha", fecha);
+
+        // -------- 3) Identificador -> tabla/columnas --------
+        int id = readIdentificador(varIdentificador);       // de GlobalContext o literal
+        Meta m = metaPorIdentificador(id);
+        if (m == null) throw new IllegalArgumentException("Identificador desconocido: " + id);
+        System.out.println("[BD] id=" + id + " -> tabla=" + m.tabla + ", numCol=" + m.colNum + ", fechaCol=" + m.colFecha);
+
+        // -------- 4) SQL (filtra por número y fecha) --------
+        String sql =
+            "SELECT * " +
+            "FROM " + m.tabla + " " +
+            "WHERE " + m.colNum + " = '" + numero + "' " +
+            "AND TRUNC(" + m.colFecha + ") = TO_DATE('" + fecha + "', 'YYYY-MM-DD') " +
+            "FETCH FIRST 1 ROWS ONLY";
+
+        System.out.println("[SQL] " + sql);
+
+        // -------- 5) Ejecutar con tu agente y guardar resultado --------
+        String methodName = "query"; // cambia si tu agente usa otro nombre
+        StepResult result = Agentsmanager.getInstance()
+                .getOrCreateAgent(agentName)
+                .run(methodName, new Object[]{ sql });
+
+        Object first = getScenarioContext().saveLastStepResult(result).getFirst();
+        System.out.println("[BD] Resultado crudo: " + String.valueOf(first));
+
+        // Si tu framework permite, guarda campos clave
+        try {
+            GlobalContext.set("db_tabla", m.tabla);
+            GlobalContext.set("db_num_dec", result.getFieldValue(m.colNum));    // puede fallar si no existe getFieldValue
+            GlobalContext.set("db_fecha_dec", String.valueOf(result.getFieldValue(m.colFecha)));
+        } catch (Throwable ignore) {
+            // con que quede el raw ya puedes validar después
+        }
+    }
+
+    // ====== Helpers ======
+
+    private int readIdentificador(String varIdentificador) throws Exception {
+        // Puede venir como nombre de variable del contexto o como número literal
+        Object raw = GlobalContext.get(varIdentificador);
+        String s = raw != null ? String.valueOf(raw) : varIdentificador;
+        s = s.replaceAll("[^0-9]", "").trim();
+        if (s.isEmpty()) throw new Exception("No pude resolver el identificador a partir de: " + varIdentificador);
+        return Integer.parseInt(s);
+    }
+
+    private static class Meta {
+        String tabla, colNum, colFecha;
+        Meta(String t, String n, String f) { tabla=t; colNum=n; colFecha=f; }
+    }
+
+    // Ajusta nombres exactos según tu BD (estos salen de tus capturas)
+    private Meta metaPorIdentificador(int id) {
+        switch (id) {
+            case 1:  return new Meta("BAC_F2VI_FOR_IMPORT_BIENES",     "DIB_NUM_DEC_INITC", "DIB_FECHA_DEC_INITC");
+            case 2:  return new Meta("BAC_F2VI_FOR_DECLA_EXPOR_BIEN",  "DIE_NUM_DEC_INITC", "DIE_FECHA_DEC_INITC");
+            case 3:  return new Meta("BAC_F2VI_FOR_ENMEDA_EXTER",      "DEB_NUM_DEC_INITC", "DEB_FECHA_DEC_INITC");
+            case 4:  return new Meta("BAC_F2VI_FOR_INTERNAS",          "DII_NUM_DEC_INITC", "DII_FECHA_DEC_INITC");
+            case 5:  return new Meta("BAC_F2VI_FOR_SERV_TRANSF_OTROS", "DST_NUM_DEC_INITC", "DST_FECHA_DEC_INITC");
+            default: return null;
+        }
+    }
+
+    // Busca archivo desde raíz del proyecto; si no tiene extensión, prueba .json; y prueba src/test/resources/data
+    private Path resolvePathFromProjectRoot(String nameOrPath, boolean addJsonFallback) throws Exception {
+        String proj = System.getProperty("user.dir");
+        List<Path> candidates = new ArrayList<>();
+        Path asIs = Paths.get(nameOrPath);
+        candidates.add(asIs.isAbsolute() ? asIs : Paths.get(proj).resolve(nameOrPath));
+        if (addJsonFallback && !nameOrPath.toLowerCase().contains(".")) {
+            candidates.add(Paths.get(proj).resolve(nameOrPath + ".json"));
+        }
+        candidates.add(Paths.get(proj, "src", "test", "resources", "data", nameOrPath));
+        if (addJsonFallback && !nameOrPath.toLowerCase().contains(".")) {
+            candidates.add(Paths.get(proj, "src", "test", "resources", "data", nameOrPath + ".json"));
+        }
+        for (Path p : candidates) if (Files.exists(p)) return p.toAbsolutePath().normalize();
+        throw new Exception("No existe el archivo. Intenté:\n" + String.join("\n",
+                candidates.stream().map(x -> " - " + x.toAbsolutePath()).toList()));
+    }
+
+    // JSON plano: "clave":"valor" y "clave":123
+    private Map<String, String> parseJsonPlano(String json) {
+        Map<String, String> out = new LinkedHashMap<>();
+        Matcher m1 = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"").matcher(json);
+        while (m1.find()) out.put(m1.group(1), m1.group(2));
+        Matcher m2 = Pattern.compile("\"([^\"]+)\"\\s*:\\s*([-]?[0-9]+(?:\\.[0-9]+)?)").matcher(json);
+        while (m2.find()) out.putIfAbsent(m2.group(1), m2.group(2));
+        return out;
+    }
+
+    private String opt(String s) { return (s==null || s.isEmpty()) ? null : s.trim(); }
+}

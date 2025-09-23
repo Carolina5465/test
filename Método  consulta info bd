@@ -1,0 +1,98 @@
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class OperationsFormsBaca extends BaseCommonStepdefs {
+
+    @When("^(\\w+) consulto datos desde \"([^\"]+)\" con el identificador (.+)$")
+    public void cargandoDatosOPF(String agentName, String nombreArchivo, String identificador) throws Exception {
+        // 0) Resolver identificador: acepta literal ("3") o @variable (ej. @identificador -> busca en GlobalContext)
+        identificador = resolveMaybeVar(identificador);
+        System.out.println("[INFO] identificador recibido -> " + identificador);
+
+        // 1) Ruta: archivo en la RAÍZ del proyecto (con fallback a .json si no trae extensión)
+        Path ruta = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+        if (!Files.exists(ruta) && !nombreArchivo.toLowerCase().contains(".")) {
+            ruta = Paths.get(System.getProperty("user.dir"), nombreArchivo + ".json");
+        }
+        if (!Files.exists(ruta)) {
+            throw new Exception("No existe el archivo de datos: " + ruta.toAbsolutePath());
+        }
+        System.out.println("[OPF] Leyendo: " + ruta.toAbsolutePath());
+
+        // 2) Leer contenido del JSON
+        String json = Files.readString(ruta, StandardCharsets.UTF_8).trim();
+
+        // 3) Parsear JSON plano (sin libs externas)
+        Map<String, String> kv = parseJsonPlano(json);
+        if (kv.isEmpty()) {
+            throw new Exception("Archivo JSON vacío o formato no soportado: " + ruta.toAbsolutePath());
+        }
+
+        // 4) Guardar cada campo como variable
+        //    - variable directa con el nombre del campo (p.ej. numeroDeclaracion)
+        //    - y otra con prefijo "xml_OPF_" (p.ej. xml_OPF_numeroDeclaracion)
+        for (Map.Entry<String, String> e : kv.entrySet()) {
+            String key = e.getKey();
+            String value = e.getValue();
+            GlobalContext.set(key, value);
+            GlobalContext.set("xml_OPF_" + key, value);
+            System.out.println("[OPF] var " + key + " = " + value);
+        }
+
+        // 5) Aliases/normalizaciones útiles
+        // alias de numeroDeclaracion
+        if (kv.containsKey("numeroDeclaracion")) {
+            GlobalContext.set("xml_OPF_numero", kv.get("numeroDeclaracion"));
+        }
+        // alias de fechaDeclaracion normalizada a yyyy-MM-dd (por si viniera con '/')
+        if (kv.containsKey("fechaDeclaracion")) {
+            String f = kv.get("fechaDeclaracion");
+            if (f != null) f = f.replace('/', '-');
+            GlobalContext.set("xml_OPF_fecha", f);
+        }
+
+        // 6) Dejar identificador normalizado disponible también en contexto
+        String idOnlyDigits = identificador == null ? "" : identificador.replaceAll("\\D", "");
+        GlobalContext.set("xml_OPF_identificador", idOnlyDigits);
+        GlobalContext.set("identificador", idOnlyDigits); // opcional: sin prefijo
+        System.out.println("[OPF] identificador normalizado = " + idOnlyDigits);
+    }
+
+    // -------- Helper: resuelve @variable desde GlobalContext; si no tiene @, lo devuelve tal cual --------
+    private String resolveMaybeVar(String token) throws Exception {
+        if (token == null) return null;
+        token = token.trim();
+        if (token.startsWith("@")) {
+            String key = token.substring(1);              // "@identificador" -> "identificador"
+            Object val = GlobalContext.get(key);
+            if (val == null)
+                throw new Exception("Variable @" + key + " no está definida en GlobalContext");
+            return String.valueOf(val);
+        }
+        return token;
+    }
+
+    /* -------- Helper: JSON plano sin dependencias externas --------
+       Captura "clave":"valor" y también "clave":123 (número sin comillas).
+       Extrae pares de PRIMER nivel, suficiente para tu archivo de ejemplo.
+    ---------------------------------------------------------------- */
+    private Map<String, String> parseJsonPlano(String json) {
+        Map<String, String> out = new LinkedHashMap<>();
+
+        // "clave":"valor"
+        Matcher m1 = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"").matcher(json);
+        while (m1.find()) out.put(m1.group(1), m1.group(2));
+
+        // "clave": 123  (o 123.45)
+        Matcher m2 = Pattern.compile("\"([^\"]+)\"\\s*:\\s*([-]?[0-9]+(?:\\.[0-9]+)?)").matcher(json);
+        while (m2.find()) out.putIfAbsent(m2.group(1), m2.group(2));
+
+        return out;
+    }
+}

@@ -1,0 +1,14 @@
+// 1) Convertir fecha del JSON (ej. "2025-09-17") a formato "dd-MMM-yy"
+DateTimeFormatter entrada = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+DateTimeFormatter salida = DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH);
+
+String fechaFormateada = LocalDate.parse(fechaDeclaracion, entrada).format(salida);
+
+// 2) Construir el SQL usando la fecha ya formateada
+String sql =
+    "SELECT ESTADO_APROBACION " +
+    "FROM " + tabla +
+    " WHERE " + idCol + " LIKE '%" + numeroDeclaracion + "'" +
+    " AND TRUNC(" + dateCol + ") = '" + fechaFormateada + "'";
+
+System.out.println("[BD] SQL consulta construida = " + sql);

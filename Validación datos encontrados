@@ -1,0 +1,26 @@
+String haystack = normalize(rowJson);
+
+for (Entry<String, String> e : kv.entrySet()) {
+    String key   = e.getKey();
+    String value = e.getValue();
+
+    if (value == null || value.isEmpty()) continue;
+
+    // Normaliza para comparar
+    String candidate = overrides.getOrDefault(key, value);
+    String needle    = normalize(candidate);
+
+    // Caso óptico: quitar separadores para comparar números largos
+    String altNeed = needle.replaceAll("[\\.,\\s]", "");
+    String altHay  = haystack.replaceAll("[\\.,\\s]", "");
+
+    if (haystack.contains(needle) || altHay.contains(altNeed)) {
+        // ✅ Encontrado
+        System.out.println("[OK] Se encontró el valor del JSON en la fila. Clave='" 
+                           + key + "' Valor='" + value + "'");
+    } else {
+        // ❌ No encontrado
+        throw new AssertionError("[BD] No se encontró el valor del JSON en la fila. Clave='" 
+                                 + key + "' Valor='" + value + "' ValorComparado='" + candidate + "'");
+    }
+}

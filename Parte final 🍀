@@ -1,0 +1,71 @@
+// ====== DESPUÉS de ejecutar la consulta y obtener la fila en formato JSON de BD ======
+// Supongo que guardaste el JSON de la fila en una String llamada rowJson.
+// Si tu agente te da un objeto distinto, conviértelo a String aquí.
+String rowJson = /* lo que devuelva tu agente, como String */ result.getFieldValue("rowJson"); 
+// Si ya tienes el String de la fila en otra variable, usa esa.
+if (rowJson == null) {
+    throw new AssertionError("[BD] La consulta no retornó datos (rowJson nulo).");
+}
+
+// Normalizamos el “pajar” de BD una sola vez
+String haystack = normalize(rowJson);
+
+// (Opcional) mapea/transforma valores del JSON de entrada que deben verse con otro formato en BD:
+Map<String,String> overrides = new HashMap<>();
+// Ej.: fechaDeclaracion en el JSON viene yyyy-MM-dd y en BD aparece como dd-MMM-yy (ej. 17-SEP-25)
+String fechaJson = kv.get("fechaDeclaracion");
+if (fechaJson != null && !fechaJson.trim().isEmpty()) {
+    try {
+        DateTimeFormatter inFmt  = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        DateTimeFormatter outFmt = DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH);
+        String fechaBD = LocalDate.parse(fechaJson.trim(), inFmt).format(outFmt).toUpperCase(Locale.ROOT);
+        // Sobrescríbelo para que se valide contra lo que hay en BD
+        overrides.put("fechaDeclaracion", fechaBD);
+    } catch (Exception ignore) {
+        // Si no se puede formatear, lo validaremos tal como viene
+    }
+}
+
+// Recorremos TODO el JSON de entrada y validamos que sus valores estén contenidos en el JSON devuelto por BD
+for (Map.Entry<String,String> e : kv.entrySet()) {
+    String key = e.getKey();
+    String raw = e.getValue();
+
+    if (raw == null) continue;
+    raw = raw.trim();
+    if (raw.isEmpty()) continue;
+
+    // Aplica override si existe para esa clave (p.ej. fecha)
+    String candidate = overrides.getOrDefault(key, raw);
+
+    // Normaliza el “aguja”
+    String needle = normalize(candidate);
+
+    // Pequeños ajustes opcionales:
+    // - para números con separadores, intenta también sin separadores
+    if (!haystack.contains(needle)) {
+        String alt = needle.replaceAll("[,\\.\\s]", "");
+        if (!alt.equals(needle) && haystack.replaceAll("[,\\.\\s]", "").contains(alt)) {
+            continue; // encontrado en variante sin separadores
+        }
+        // No se encontró: falla explicitando qué valor no apareció
+        throw new AssertionError(
+            "[BD] No se encontró el valor del JSON en la fila de BD. Clave='" + key +
+            "' Valor='" + candidate + "'"
+        );
+    }
+}
+
+System.out.println("[OK] Todos los valores del JSON están presentes en la fila retornada por la BD.");
+
+// ====== Helpers ======
+private static String normalize(String s) {
+    if (s == null) return "";
+    String u = s.toUpperCase(Locale.ROOT);
+    // Quita tildes/acentos
+    u = java.text.Normalizer.normalize(u, java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}+", "");
+    // Colapsa espacios
+    u = u.replaceAll("\\s+", " ").trim();
+    return u;
+}

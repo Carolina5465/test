@@ -1,0 +1,21 @@
+// =======================
+// 8) Validación dinámica: todos los valores del JSON de entrada deben estar en la fila BD
+//    (sin importar el nombre de columna)
+// =======================
+String haystack = rowJson.toUpperCase(Locale.ROOT);
+for (Map.Entry<String, String> e : kv.entrySet()) {
+    String value = e.getValue();
+    if (value == null || value.isBlank()) {
+        continue; // ignorar vacíos
+    }
+
+    String needle = value.trim().toUpperCase(Locale.ROOT);
+
+    if (haystack.contains(needle)) {
+        // ✅ Valor encontrado
+        System.out.println("[OK] Valor encontrado en BD: '" + value + "'");
+    } else {
+        // ❌ Valor no encontrado → falla la validación
+        throw new AssertionError("[BD] No se encontró el valor del JSON en la fila: '" + value + "'");
+    }
+}

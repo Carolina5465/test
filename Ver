@@ -1,0 +1,91 @@
+@When("^AgentSIT captura el numero identificador del formulario con xpath \"([^\"]+)\"$")
+public void capturaIdentificadorPorCadaNumeroDeclaracion(String xpathIdentificador) throws Exception {
+
+    // 0) Rutas / agente UI (SIN CAMBIOS de patrón)
+    Path base = Paths.get(System.getProperty("user.dir"));
+    Path txtNumeros = base.resolve("numeros_formularios_generadorXML.txt");
+    Path txtIdent = base.resolve("identificador_generadoXML.txt");
+
+    Agent ui = AgentsManager.getInstance().getOrCreateAgent(getScenarioContext().getOrCreateAgentName());
+
+    // 1) Cargar numerosDeclaracion (tal como los escribiste en el paso anterior)
+    if (!Files.exists(txtNumeros)) {
+        throw new Exception("[ID] No existe: " + txtNumeros.toAbsolutePath());
+    }
+    List<String> numeros = Files.readAllLines(txtNumeros, StandardCharsets.UTF_8).stream()
+            .map(s -> s.replace("\uFEFF","").trim()) // limpia BOM y espacios
+            .filter(s -> !s.isEmpty())
+            .distinct()
+            .collect(java.util.stream.Collectors.toList());
+
+    if (numeros.isEmpty()) {
+        throw new Exception("[ID] El archivo de numeros está vacío: " + txtNumeros.toAbsolutePath());
+    }
+    System.out.println("[ID] numerosDeclaracion = " + numeros);
+
+    // 2) Vamos a sobreescribir el identificador en cada iteración (quedará el ÚLTIMO)
+    Files.writeString(txtIdent, "", StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+    String ultimoSoloNumero = null;
+
+    for (String numDec : numeros) {
+        // 2.1) Localiza la fila por el numeroDeclaracion (PLANTILLA SIMPLE)
+        String rowXpath = "//table[@id='tablaformularios']//tr[td[normalize-space(text())="
+                + quoteForXpath(numDec) + "]]";
+        System.out.println("[ID] Click fila para numDec=" + numDec + " -> " + rowXpath);
+
+        StepResult click = ui.withResult("clickcontrol", new Object[]{ rowXpath });
+        if (click == null) throw new FastException("[ID] Falló click en fila para " + numDec);
+
+        // (respiro corto si tu UI lo necesita)
+        try { Thread.sleep(400); } catch (InterruptedException ignored) {}
+
+        // 2.2) Leer identificador con el XPATH QUE YA PASAS POR PARÁMETRO
+        StepResult read = ui.withResult("readTextOnControl1", new Object[]{ xpathIdentificador });
+        if (read == null) throw new FastException("[ID] Falló lectura del identificador para " + numDec);
+
+        String raw = String.valueOf(read.getGetValue("value")).trim();
+        if (raw.isEmpty()) throw new Exception("[ID] Identificador vacío para " + numDec + " (xpath=" + xpathIdentificador + ")");
+
+        // 2.3) Guardar SOLO EL NÚMERO (1, 2, 3, …)
+        String soloNumero = extraerPrimerEntero(raw);
+        if (soloNumero == null) throw new Exception("[ID] No se encontró número en '" + raw + "' para " + numDec);
+
+        System.out.println("[ID] numDec=" + numDec + " identificador='" + raw + "' -> guardo='" + soloNumero + "'");
+
+        Files.writeString(txtIdent, soloNumero, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+        ultimoSoloNumero = soloNumero;
+    }
+
+    // 3) Exponer en GlobalContext como antes (misma clave)
+    if (ultimoSoloNumero != null) {
+        GlobalContext.set("identificador", ultimoSoloNumero);
+    }
+    System.out.println("[ID] Identificador final (solo número) = " + ultimoSoloNumero
+            + " -> " + txtIdent.toAbsolutePath());
+}
+
+/* ===== Helpers mínimos (no tocan tus agentes/controladores) ===== */
+
+/** Devuelve el primer entero encontrado en el texto (p.ej. "Tipo 3" -> "3"). */
+private static String extraerPrimerEntero(String s) {
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)").matcher(s);
+    return m.find() ? m.group(1) : null;
+}
+
+/** Cita segura para usar un literal en XPATH (sin dependencias). */
+private static String quoteForXpath(String txt) {
+    if (!txt.contains("'")) return "'" + txt + "'";
+    // Si incluye comilla simple, usa concat('a', "'", 'b')
+    String[] parts = txt.split("'");
+    StringBuilder sb = new StringBuilder("concat(");
+    for (int i = 0; i < parts.length; i++) {
+        sb.append("'").append(parts[i]).append("'");
+        if (i < parts.length - 1) sb.append(", \"'\", ");
+    }
+    sb.append(")");
+    return sb.toString();
+}

@@ -1,0 +1,138 @@
+@When("^Extraigo datos del ultimo XML en la ruta \"([^\"]+)\" con prefijo \"([^\"]*)\"$")
+public void extraigoDatosDelUltimoXML(String carpetaXML, String prefijo) throws Exception {
+    // 1) Carpeta
+    Path dir = Paths.get(System.getProperty("user.dir"), carpetaXML);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("[XML] Carpeta no válida: " + dir.toAbsolutePath());
+    }
+
+    // 2) Elegir el XML más reciente (filtrando por prefijo si viene)
+    Path ultimoXml;
+    try (var s = Files.list(dir)) {
+        ultimoXml = s.filter(p -> p.toString().toLowerCase(Locale.ROOT).endsWith(".xml"))
+                .filter(p -> prefijo == null || prefijo.isBlank()
+                        || p.getFileName().toString().startsWith(prefijo))
+                .max(Comparator.comparingLong(p -> p.toFile().lastModified()))
+                .orElseThrow(() -> new Exception(
+                        "[XML] No hay XML en " + dir.toAbsolutePath() +
+                        (prefijo == null ? "" : " con prefijo '" + prefijo + "'")));
+    }
+    System.out.println("[XML] Archivo más reciente: " + ultimoXml.getFileName() +
+            " (mtime=" + Files.getLastModifiedTime(ultimoXml) + ")");
+
+    // 3) Parsear XML
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    dbf.setExpandEntityReferences(false);
+    Document doc = dbf.newDocumentBuilder().parse(ultimoXml.toFile());
+    doc.getDocumentElement().normalize();
+
+    // 4) Aplanar TODO el árbol (elementos y atributos)
+    Map<String, String> flat = new LinkedHashMap<>();
+    flattenXml(doc.getDocumentElement(), doc.getDocumentElement().getNodeName(), flat);
+
+    System.out.println("[XML] Total de campos aplanados: " + flat.size());
+    flat.forEach((k, v) -> System.out.println("[XML] " + k + " = " + v));
+
+    // 4.1) Generar ALIASES CORTOS (último segmento del path o del atributo)
+    //     Ej.: root.servicioOtro.fechaDeclaracion  → alias: fechaDeclaracion
+    //          root.servicioOtro@tipo              → alias: tipo
+    Map<String, String> aliases = new LinkedHashMap<>();
+    for (Map.Entry<String, String> e : flat.entrySet()) {
+        String longKey = e.getKey();
+        String value   = e.getValue();
+        String lastSeg = longKey;
+        // corta por '@' (atributos) primero
+        int at = lastSeg.lastIndexOf('@');
+        if (at >= 0) lastSeg = lastSeg.substring(at + 1);
+        // luego por '.' (path)
+        int dot = lastSeg.lastIndexOf('.');
+        if (dot >= 0) lastSeg = lastSeg.substring(dot + 1);
+        // si no existe aún, crea alias
+        aliases.putIfAbsent(lastSeg, value);
+    }
+
+    // 4.2) También crear prefijados con guion bajo (opcional, útiles para steps antiguos)
+    //      Ej.: con prefijo "xml_OPF" → xml_OPF_fechaDeclaracion
+    Map<String, String> prefixed = new LinkedHashMap<>();
+    String safePrefix = (prefijo == null || prefijo.isBlank()) ? "xml_OPF" : prefijo;
+    for (Map.Entry<String, String> e : aliases.entrySet()) {
+        String shortKey = safePrefix + "_" + e.getKey();
+        prefixed.put(shortKey, e.getValue());
+    }
+
+    // 5) Guardar JSON (claves largas + aliases cortos + aliases prefijados)
+    Map<String, String> merged = new LinkedHashMap<>();
+    merged.putAll(flat);
+    merged.putAll(aliases);
+    merged.putAll(prefixed);
+
+    Path outJson = Paths.get(System.getProperty("user.dir"), "ultimo_xml_OPF.json");
+    String json = new org.json.JSONObject(merged).toString(2);
+    Files.writeString(outJson, json, StandardCharsets.UTF_8);
+    System.out.println("[JSON] Guardado en: " + outJson.toAbsolutePath());
+
+    // 6) (OPCIONAL) Intentar exponer aliases prefijados en el ScenarioContext si existe
+    //    para que steps como 'seleccionoSoloElMes ... @xml_OPF_fechaDeclaracion'
+    //    vuelvan a funcionar sin cambios.
+    try {
+        // muchos frameworks propios exponen algo así; si no existe, no pasa nada
+        for (Map.Entry<String, String> e : prefixed.entrySet()) {
+            // si tu BaseCommonStepDefs tiene algo como: getScenarioContext().setVariable(k, v)
+            getScenarioContext().setVariable(e.getKey(), e.getValue());
+        }
+        System.out.println("[CTX] Variables prefijadas publicadas en ScenarioContext: " + prefixed.size());
+    } catch (Throwable ignore) {
+        // si tu framework no tiene contexto, simplemente lo omitimos
+        System.out.println("[CTX] ScenarioContext no disponible; se omitió la publicación de variables.");
+    }
+}
+
+/* ============ Helpers ============ */
+
+/** Recorre recursivamente el XML y llena 'out' con claves "path.tag" (y atributos "path@attr"). */
+private static void flattenXml(Node node, String path, Map<String, String> out) {
+    // Atributos como "path@attr"
+    if (node.hasAttributes()) {
+        NamedNodeMap atts = node.getAttributes();
+        for (int i = 0; i < atts.getLength(); i++) {
+            Node a = atts.item(i);
+            String k = path + "@" + a.getNodeName();
+            putNoOverwrite(out, k, a.getNodeValue());
+        }
+    }
+
+    // Hijos elemento
+    NodeList children = node.getChildNodes();
+    List<Element> elemChildren = new ArrayList<>();
+    for (int i = 0; i < children.getLength(); i++) {
+        Node n = children.item(i);
+        if (n.getNodeType() == Node.ELEMENT_NODE) elemChildren.add((Element) n);
+    }
+
+    if (elemChildren.isEmpty()) {
+        String text = node.getTextContent() == null ? "" : node.getTextContent().trim();
+        if (!text.isEmpty()) putNoOverwrite(out, path, text);
+        return;
+    }
+
+    for (Element e : elemChildren) {
+        String tag = e.getNodeName().replaceAll("\\s+", "");
+        flattenXml(e, path + "." + tag, out);
+    }
+}
+
+/** Inserta (clave, valor). Si ya existe la clave, crea sufijo [2], [3], ... para no perder datos. */
+private static void putNoOverwrite(Map<String, String> out, String key, String value) {
+    if (value == null) value = "";
+    value = value.trim();
+    if (value.isEmpty()) return;
+
+    if (!out.containsKey(key)) {
+        out.put(key, value);
+        return;
+    }
+    int i = 2;
+    while (out.containsKey(key + "[" + i + "]")) i++;
+    out.put(key + "[" + i + "]", value);
+}

@@ -1,0 +1,132 @@
+@When("^Extraigo datos del ultimo XML en la ruta \"([^\"]+)\" con prefijo \"([^\"]*)\"$")
+public void extraigoDatosDelUltimoXML(String carpetaXML, String prefijo) throws Exception {
+    // 1) Carpeta
+    Path dir = Paths.get(System.getProperty("user.dir"), carpetaXML);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("[XML] Carpeta no válida: " + dir.toAbsolutePath());
+    }
+
+    // 2) Elegir el XML más reciente (filtrando por prefijo si viene)
+    Path ultimoXml;
+    try (var s = Files.list(dir)) {
+        ultimoXml = s.filter(p -> p.toString().toLowerCase(Locale.ROOT).endsWith(".xml"))
+                .filter(p -> prefijo == null || prefijo.isBlank()
+                        || p.getFileName().toString().startsWith(prefijo))
+                .max(Comparator.comparingLong(p -> p.toFile().lastModified()))
+                .orElseThrow(() -> new Exception("[XML] No hay XML en " + dir.toAbsolutePath()
+                        + (prefijo == null ? "" : " con prefijo '" + prefijo + "'")));
+    }
+    System.out.println("[XML] Archivo más reciente: " + ultimoXml.getFileName()
+            + " (mtime=" + Files.getLastModifiedTime(ultimoXml) + ")");
+
+    // 3) Parsear XML
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    dbf.setExpandEntityReferences(false);
+    Document doc = dbf.newDocumentBuilder().parse(ultimoXml.toFile());
+    doc.getDocumentElement().normalize();
+
+    // 4) Aplanar TODO el árbol
+    Map<String, String> flat = new LinkedHashMap<>();
+    String rootName = doc.getDocumentElement().getNodeName(); // típicamente "root"
+    flattenXml(doc.getDocumentElement(), rootName, flat);
+
+    System.out.println("[XML] Total de campos aplanados: " + flat.size());
+
+    // 5) Elegir sección dinámica (servicioOtro, importacionBienes, detalleOperaciones, ...)
+    List<String> preferidas = Arrays.asList("servicioOtro", "importacionBienes", "detalleOperaciones");
+    List<String> basesDetectadas = new ArrayList<>();
+
+    // Detecta qué prefijos existen realmente en el XML
+    for (String sec : preferidas) {
+        String base = rootName + "." + sec + ".";
+        boolean existe = flat.keySet().stream().anyMatch(k -> k.startsWith(base));
+        if (existe) basesDetectadas.add(base);
+    }
+
+    Map<String, String> out = new LinkedHashMap<>();
+
+    if (!basesDetectadas.isEmpty()) {
+        // Tomar TODAS las secciones detectadas (por si algunas vienen juntas)
+        System.out.println("[XML] Secciones detectadas: " + basesDetectadas);
+        for (String base : basesDetectadas) {
+            for (Map.Entry<String,String> e : flat.entrySet()) {
+                String k = e.getKey();
+                if (k.startsWith(base)) {
+                    String tail = k.substring(base.length()); // e.g. "fechaDeclaracion"
+                    out.put("OPF_" + tail, e.getValue());
+                }
+            }
+        }
+    } else {
+        // Fallback: no hay secciones preferidas -> tomar todo lo que esté bajo root.[algo].
+        // Solo extrae hojas (las que no tienen más puntos después), para evitar llaves intermedias.
+        System.out.println("[XML] No se detectaron secciones preferidas; se tomará todo 'root.*'");
+        for (Map.Entry<String,String> e : flat.entrySet()) {
+            String k = e.getKey();
+            if (k.startsWith(rootName + ".") && !k.equals(rootName)) {
+                // Normaliza la cola quitando el "root."
+                String tail = k.substring((rootName + ".").length());
+                out.put("OPF_" + tail, e.getValue());
+            }
+        }
+    }
+
+    System.out.println("[JSON] Total de claves OPF_*: " + out.size());
+    // out.forEach((k,v) -> System.out.println("  " + k + " = " + v)); // opcional
+
+    // 6) Guardar JSON (SOBREESCRIBE)
+    Path outJson = Paths.get(System.getProperty("user.dir"), "ultimo_xml_OPF.json");
+    String json = new org.json.JSONObject(out).toString(2);
+    Files.writeString(
+            outJson, json, StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE
+    );
+
+    System.out.println("[JSON] Guardado en: " + outJson.toAbsolutePath());
+}
+
+/* ================= Helpers ================= */
+
+private static void flattenXml(Node node, String path, Map<String, String> out) {
+    if (node.hasAttributes()) {
+        NamedNodeMap atts = node.getAttributes();
+        for (int i = 0; i < atts.getLength(); i++) {
+            Node a = atts.item(i);
+            String k = path + "@" + a.getNodeName();
+            putNoOverwrite(out, k, a.getNodeValue());
+        }
+    }
+
+    NodeList children = node.getChildNodes();
+    List<Element> elemChildren = new ArrayList<>();
+    for (int i = 0; i < children.getLength(); i++) {
+        Node n = children.item(i);
+        if (n.getNodeType() == Node.ELEMENT_NODE) elemChildren.add((Element) n);
+    }
+
+    if (elemChildren.isEmpty()) {
+        String text = node.getTextContent() == null ? "" : node.getTextContent().trim();
+        if (!text.isEmpty()) putNoOverwrite(out, path, text);
+        return;
+    }
+
+    for (Element e : elemChildren) {
+        String tag = e.getNodeName().replaceAll("\\s+", "");
+        flattenXml(e, path + "." + tag, out);
+    }
+}
+
+private static void putNoOverwrite(Map<String, String> out, String key, String value) {
+    if (value == null) value = "";
+    value = value.trim();
+    if (value.isEmpty()) return;
+
+    if (!out.containsKey(key)) {
+        out.put(key, value);
+        return;
+    }
+    int i = 2;
+    while (out.containsKey(key + "[" + i + "]")) i++;
+    out.put(key + "[" + i + "]", value);
+}

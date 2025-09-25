@@ -1,0 +1,142 @@
+// imports que probablemente ya tienes:
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.Collectors;
+
+import fast.common.agents.Agent;
+import fast.common.agents.AgentsManager;
+import fast.common.core.StepResult;
+
+public class OperationsFormsBaca extends BaseCommonStepDefs {
+
+    /**
+     * Recorre todos los numeroDeclaracion que están en numeros_formularios_generadorXML.txt,
+     * selecciona su fila y captura el identificador (guardando SOLO el dígito 1..5, etc.).
+     * El valor final se persiste en identificador_generadoXML.txt y en GlobalContext("identificador").
+     */
+    @When("^AgentSIT captura identificadores para cada numeroDeclaracion$")
+    public void capturaIdentificadoresParaCadaNumeroDeclaracion() throws Exception {
+
+        // =======================
+        // 0) XPATHS EMBEBIDOS
+        // =======================
+        // TODO: Ajusta el XPATH de la FILA que contiene el numeroDeclaracion en una celda.
+        // Use {NUM} como marcador que será reemplazado por cada numeroDeclaracion.
+        final String ROW_XPATH_TEMPLATE =
+                "//table[@id='tablaformularios']//tr[td[normalize-space(text())='{NUM}']]";
+
+        // TODO: Ajusta el XPATH del INPUT (o label) de donde leeremos el identificador.
+        // Debe devolver un texto/valor como "1", "2", ..., o algo que contenga esos dígitos.
+        final String IDENT_INPUT_XPATH =
+                "//input[@id='idFormulario']";
+
+        // nombre del agente UI (ajústalo si en tu proyecto el agente se llama distinto)
+        final String agentName = getScenarioContext().getOrCreateAgentName();
+
+        // =======================
+        // 1) Leemos los números de declaración
+        // =======================
+        Path base = Paths.get(System.getProperty("user.dir"));
+        Path numerosPath = base.resolve("numeros_formularios_generadorXML.txt");
+
+        if (!Files.exists(numerosPath)) {
+            throw new Exception("[ID] No existe el archivo: " + numerosPath.toAbsolutePath());
+        }
+
+        List<String> numeros = Files.readAllLines(numerosPath, StandardCharsets.UTF_8).stream()
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .collect(Collectors.toList());
+
+        if (numeros.isEmpty()) {
+            throw new Exception("[ID] El archivo de números de formularios está vacío: " + numerosPath.toAbsolutePath());
+        }
+
+        System.out.println("[ID] numeroDeclaracion leídos (" + numeros.size() + "): " + numeros);
+
+        // =======================
+        // 2) Iteramos y capturamos identificadores
+        // =======================
+        Agent ui = AgentsManager.getInstance().getOrCreateAgent(agentName);
+
+        // archivo de salida (se sobreescribe en cada corrida)
+        Path outIdentPath = base.resolve("identificador_generadoXML.txt");
+        Files.writeString(outIdentPath, "", StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+        String ultimoIdentificadorSoloNumero = null;
+
+        for (String numDec : numeros) {
+            // 2.1) click en la fila del numeroDeclaracion
+            String rowXpath = ROW_XPATH_TEMPLATE.replace("{NUM}", escapeXpathText(numDec));
+            System.out.println("[ID] Click fila numeroDeclaracion=" + numDec + " xpath=" + rowXpath);
+
+            StepResult clickRes = ui.withResult("clickcontrol", new Object[]{ rowXpath });
+            if (clickRes == null) throw new FastException("[ID] Falló click en la fila para " + numDec);
+
+            // (pequeño respiro opcional si tu UI lo necesita)
+            try { Thread.sleep(600); } catch (InterruptedException ignored) {}
+
+            // 2.2) leer el identificador desde el input fijo
+            StepResult readRes = ui.withResult("readTextOnControl1", new Object[]{ IDENT_INPUT_XPATH });
+            if (readRes == null) throw new FastException("[ID] Falló lectura del identificador para " + numDec);
+
+            String raw = String.valueOf(readRes.getGetValue("value")).trim();
+            if (raw.isEmpty()) throw new Exception("[ID] Identificador vacío para numeroDeclaracion=" + numDec);
+
+            String soloNumero = extraerPrimerEntero(raw);  // <— guarda únicamente el dígito/entero
+            if (soloNumero == null) {
+                throw new Exception("[ID] No se encontró dígito en el identificador leído: '" + raw + "' para " + numDec);
+            }
+
+            System.out.println("[ID] numDec=" + numDec + " identificador(raw)='" + raw + "'  -> guardando='" + soloNumero + "'");
+
+            // 2.3) persistimos (si quieres 1 por línea, usa APPEND; si quieres “el último”, se va sobreescribiendo)
+            Files.writeString(outIdentPath, soloNumero, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            ultimoIdentificadorSoloNumero = soloNumero;
+
+            // (opcional) si deseas mantener un histórico, descomenta y comenta la línea anterior
+            // Files.writeString(outIdentPath, soloNumero + System.lineSeparator(), StandardCharsets.UTF_8,
+            //        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        }
+
+        // =======================
+        // 3) Exponer en GlobalContext el último identificador (solo número)
+        // =======================
+        if (ultimoIdentificadorSoloNumero != null) {
+            GlobalContext.set("identificador", ultimoIdentificadorSoloNumero);
+            System.out.println("[ID] Guardado en GlobalContext('identificador') = " + ultimoIdentificadorSoloNumero);
+        }
+
+        System.out.println("[ID] Identificador guardado en: " + outIdentPath.toAbsolutePath());
+    }
+
+    // =======================
+    // Helpers
+    // =======================
+
+    /** Extrae el primer entero positivo que encuentre en el texto (por ejemplo, "Tipo 3" -> "3"). */
+    private static String extraerPrimerEntero(String s) {
+        if (s == null) return null;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)").matcher(s);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /** Escapa el texto para usarlo dentro de predicados XPATH con normalize-space(text()) = ... */
+    private static String escapeXpathText(String text) {
+        // Caso simple sin comillas simples:
+        if (!text.contains("'")) return text;
+        // Si trae comillas simples, usamos concat('a', "'", 'b') estrategia simple:
+        String[] parts = text.split("'");
+        StringBuilder sb = new StringBuilder("concat(");
+        for (int i = 0; i < parts.length; i++) {
+            sb.append("'").append(parts[i]).append("'");
+            if (i < parts.length - 1) sb.append(", \"'\", ");
+        }
+        sb.append(")");
+        return sb.toString();
+    }
+}

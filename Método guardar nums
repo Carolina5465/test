@@ -1,0 +1,78 @@
+// === IMPORTS necesarios ===
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.time.Instant;
+import java.util.*;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.w3c.dom.*;
+
+// ===============================================
+// 1) LEE EL ÚLTIMO XML Y GUARDA *TODOS* los números de declaración
+//    en numeros_formularios_generadorXML.txt (uno por línea).
+//    Además publica el primero en GlobalContext ("xml_OPF_numeroDeclaracion")
+//    para compatibilidad con pasos existentes.
+// ===============================================
+@When("^Guardo el numeroDeclaracion del ultimo XML en ruta \"([^\"]+)\"$")
+public void guardoNumeroDeclaracionDelUltimoXML(String carpetaXML) throws Exception {
+    // -- 1) Validar carpeta
+    Path dir = Paths.get(System.getProperty("user.dir"), carpetaXML);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("[XML] Carpeta no válida: " + dir.toAbsolutePath());
+    }
+
+    // -- 2) Tomar el XML más reciente (por lastModified)
+    Path ultimoXml;
+    try (var s = Files.list(dir)) {
+        ultimoXml = s.filter(p -> p.toString().toLowerCase(Locale.ROOT).endsWith(".xml"))
+                     .max(Comparator.comparingLong(p -> p.toFile().lastModified()))
+                     .orElseThrow(() -> new Exception("[XML] No hay XML en " + dir.toAbsolutePath()));
+    }
+    System.out.println("[XML] Último XML = " + ultimoXml.getFileName()
+            + " (mtime=" + Files.getLastModifiedTime(ultimoXml) + ")");
+
+    // -- 3) Parsear DOM
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    dbf.setExpandEntityReferences(false);
+    Document doc = dbf.newDocumentBuilder().parse(ultimoXml.toFile());
+    doc.getDocumentElement().normalize();
+
+    // -- 4) Obtener *todas* las ocurrencias de <numeroDeclaracion> en el árbol
+    NodeList nl = doc.getElementsByTagName("numeroDeclaracion");
+    if (nl == null || nl.getLength() == 0) {
+        throw new Exception("[XML] No se encontraron nodos <numeroDeclaracion> en: " + ultimoXml.getFileName());
+    }
+
+    // Usamos LinkedHashSet para mantener orden + evitar duplicados
+    Set<String> numeros = new LinkedHashSet<>();
+    for (int i = 0; i < nl.getLength(); i++) {
+        Node n = nl.item(i);
+        String raw = n.getTextContent() == null ? "" : n.getTextContent().trim();
+        String soloDigitos = raw.replaceAll("[^0-9]", ""); // deja solo números
+        if (!soloDigitos.isEmpty()) {
+            numeros.add(soloDigitos);
+        }
+    }
+
+    if (numeros.isEmpty()) {
+        throw new Exception("[XML] Los <numeroDeclaracion> estaban vacíos o sin dígitos en: " + ultimoXml.getFileName());
+    }
+
+    System.out.println("[XML] numeroDeclaracion encontrados (" + numeros.size() + "): " + numeros);
+
+    // -- 5) Guardar todos en archivo (uno por línea)
+    Path outTxt = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadorXML.txt");
+    Files.write(outTxt, String.join(System.lineSeparator(), numeros).getBytes(StandardCharsets.UTF_8),
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+    System.out.println("[OK] Guardados " + numeros.size() + " numeroDeclaracion en: " + outTxt.toAbsolutePath());
+
+    // -- 6) Compatibilidad: publicar el primero en GlobalContext (si tu framework lo expone)
+    try {
+        String primero = numeros.iterator().next();
+        // Si tienes una clase GlobalContext accesible, deja esta línea:
+        GlobalContext.set("xml_OPF_numeroDeclaracion", primero);
+        System.out.println("[CTX] Publicado xml_OPF_numeroDeclaracion=" + primero);
+    } catch (Throwable ignore) {
+        System.out.println("[CTX] GlobalContext no disponible; se omitió la publicación.");
+    }
+}

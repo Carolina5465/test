@@ -1,0 +1,95 @@
+@When("^Extraigo datos del ultimo XML en la ruta \"([^\"]+)\" con prefijo \"([^\"]*)\"$")
+public void extraigoDatosDelUltimoXML(String carpetaXML, String prefijo) throws Exception {
+    // 1) Carpeta
+    Path dir = Paths.get(System.getProperty("user.dir"), carpetaXML);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("[XML] Carpeta no válida: " + dir.toAbsolutePath());
+    }
+
+    // 2) Elegir el XML más reciente (filtrando por prefijo si viene)
+    Path ultimoXml;
+    try (var s = Files.list(dir)) {
+        ultimoXml = s.filter(p -> p.toString().toLowerCase(Locale.ROOT).endsWith(".xml"))
+                .filter(p -> prefijo == null || prefijo.isBlank()
+                        || p.getFileName().toString().startsWith(prefijo))
+                .max(Comparator.comparingLong(p -> p.toFile().lastModified()))
+                .orElseThrow(() -> new Exception("[XML] No hay XML en " + dir.toAbsolutePath()
+                        + (prefijo == null ? "" : " con prefijo '" + prefijo + "'")));
+    }
+    System.out.println("[XML] Archivo más reciente: " + ultimoXml.getFileName()
+            + " (mtime=" + Files.getLastModifiedTime(ultimoXml) + ")");
+
+    // 3) Parsear XML (DOM)
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    dbf.setExpandEntityReferences(false);
+    Document doc = dbf.newDocumentBuilder().parse(ultimoXml.toFile());
+    doc.getDocumentElement().normalize();
+
+    // 4) Aplanar TODO el árbol (ruta completa -> valor)
+    Map<String, String> flat = new LinkedHashMap<>();
+    flattenXml(doc.getDocumentElement(), doc.getDocumentElement().getNodeName(), flat);
+
+    System.out.println("[XML] Total de campos aplanados (full-path): " + flat.size());
+    // flat.forEach((k, v) -> System.out.println("[XML] " + k + " = " + v)); // si quieres debug detallado
+
+    // 5) Reducir a claves cortas: OPF_<ultimoSegmento>
+    Map<String, String> shortMap = new LinkedHashMap<>();
+    for (Map.Entry<String, String> e : flat.entrySet()) {
+        String shortKey = toOpfShortKey(e.getKey());
+        putUniqueIfDiff(shortMap, shortKey, e.getValue());
+    }
+
+    System.out.println("[XML] Total de claves cortas generadas: " + shortMap.size());
+    shortMap.forEach((k, v) -> System.out.println("[OPF] " + k + " = " + v));
+
+    // 6) Guardar SOLO el mapa de claves cortas en ultimo_xml_OPF.json
+    Path outJson = Paths.get(System.getProperty("user.dir"), "ultimo_xml_OPF.json");
+    String json = new org.json.JSONObject(shortMap).toString(2);
+    Files.writeString(outJson, json, StandardCharsets.UTF_8);
+    System.out.println("[JSON] Guardado en: " + outJson.toAbsolutePath());
+}
+
+/* =================== Helpers =================== */
+
+/** Convierte 'root.servicioOtro.fechaDeclaracion' -> 'OPF_fechaDeclaracion'
+ *  y 'root.tag@attr' -> 'OPF_attr' */
+private static String toOpfShortKey(String fullPath) {
+    if (fullPath == null || fullPath.isBlank()) return "OPF_";
+    String last = fullPath;
+    int idx = fullPath.lastIndexOf('.');
+    if (idx >= 0 && idx < fullPath.length() - 1) {
+        last = fullPath.substring(idx + 1);
+    }
+    // Si es atributo 'tag@attr', nos quedamos con el nombre del atributo
+    int attrIdx = last.indexOf('@');
+    if (attrIdx >= 0 && attrIdx < last.length() - 1) {
+        last = last.substring(attrIdx + 1);
+    }
+    // Sanitizar: quitar espacios y caracteres raros -> _
+    last = last.replaceAll("\\s+", "")
+               .replaceAll("[^A-Za-z0-9_]", "_");
+    return "OPF_" + last;
+}
+
+/** Inserta key->value; si existe con valor distinto, agrega [2], [3]… para no perder datos. 
+ *  Si existe con el MISMO valor, no duplica. */
+private static void putUniqueIfDiff(Map<String, String> map, String key, String value) {
+    if (value == null) value = "";
+    value = value.trim();
+    if (!map.containsKey(key)) {
+        map.put(key, value);
+        return;
+    }
+    if (Objects.equals(map.get(key), value)) {
+        return; // ya está con el mismo valor; no duplicamos
+    }
+    int i = 2;
+    while (map.containsKey(key + "[" + i + "]")) {
+        if (Objects.equals(map.get(key + "[" + i + "]"), value)) {
+            return; // ya existe esta variante con mismo valor
+        }
+        i++;
+    }
+    map.put(key + "[" + i + "]", value);
+}

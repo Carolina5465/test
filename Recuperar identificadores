@@ -1,0 +1,84 @@
+// (1) Recupera y procesa TODOS los numerosDeclaracion desde TXT
+@When("capturo el numero indicador del formulario actual desde archivo TXT")
+public void capturoFormuBaseDesdeXML() throws Exception {
+    // Rutas
+    Path baseDir = Paths.get(System.getProperty("user.dir"));
+    Path pathNumeros = baseDir.resolve("numeros_formularios_generadorXML.txt");   // <- lista de numeroDeclaracion (uno por línea)
+    Path outFile     = baseDir.resolve("identificador_generadoXML.txt");          // <- aquí guardamos los identificadores (solo número)
+
+    // Validaciones
+    if (!Files.exists(pathNumeros)) {
+        throw new Exception("El archivo numeros_formularios_generadorXML.txt no existe en: " + pathNumeros.toAbsolutePath());
+    }
+
+    // Cargar todos los numeroDeclaracion
+    java.util.List<String> numeros = Files.readAllLines(pathNumeros, StandardCharsets.UTF_8).stream()
+            .map(s -> s.replace("\uFEFF", "").trim())
+            .filter(s -> !s.isEmpty())
+            .distinct()
+            .collect(java.util.stream.Collectors.toList());
+
+    if (numeros.isEmpty()) {
+        throw new Exception("El archivo numeros_formularios_generadorXML.txt no contiene números válidos");
+    }
+    System.out.println("[INFO] numerosDeclaracion a procesar: " + numeros);
+
+    // Truncar archivo de salida (lo volvemos a crear)
+    Files.writeString(outFile, "", StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+    // Agente UI (mismo estilo)
+    StepResult result;
+    // usa tu helper existente
+    var agent = AgentsManager.getOrCreateAgent(getAgentName());
+
+    String ultimoSoloNumero = null;
+
+    for (String numeroDeclaracion : numeros) {
+        System.out.println("[INFO] Procesando numeroDeclaracion: " + numeroDeclaracion);
+
+        // XPath DINÁMICO (idéntico a tu estilo)
+        String identificador_xpath = "//tr[./td/normalize-space()='" + numeroDeclaracion + "']/td[last()]";
+
+        // Leer identificador
+        result = agent.runWithResult("readTextOnControl", new Object[]{ identificador_xpath });
+        if (result == null) {
+            throw new FastException("El resultado del agente fue nulo para numeroDeclaracion=" + numeroDeclaracion);
+        }
+
+        // Guardar result en el contexto (igual que tenías)
+        getScenarioContext().saveLastStepResult(result, identificador_xpath);
+
+        String identificadorRaw = String.valueOf(result.getFieldValue("value")).trim();
+        if (identificadorRaw.isEmpty()) {
+            throw new Exception("Identificador vacío para numeroDeclaracion=" + numeroDeclaracion + " (xpath=" + identificador_xpath + ")");
+        }
+
+        // Extraer SOLO el número (ej. "Tipo 3" -> "3")
+        String soloNumero = extraerPrimerEntero(identificadorRaw);
+        if (soloNumero == null || soloNumero.isEmpty()) {
+            throw new Exception("No se encontró un número en el identificador leído: '" + identificadorRaw + "' para numeroDeclaracion=" + numeroDeclaracion);
+        }
+
+        // Append (uno por línea)
+        Files.writeString(outFile, soloNumero + System.lineSeparator(), StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+
+        // Mantener compatibilidad: publicar último valor en GlobalContext
+        GlobalContext.set(getScenarioContext().getTestCaseResultVariable(), soloNumero);
+        ultimoSoloNumero = soloNumero;
+
+        System.out.println("[OK] numDec=" + numeroDeclaracion +
+                " identificadorRaw='" + identificadorRaw + "' -> guardado='" + soloNumero + "'");
+    }
+
+    System.out.println("[OK] Identificadores (solo número) guardados en: " + outFile.toAbsolutePath());
+    System.out.println("[OK] Último identificador publicado en GlobalContext = " + ultimoSoloNumero);
+}
+
+// Helper: devuelve el primer entero encontrado en el texto
+private static String extraerPrimerEntero(String s) {
+    if (s == null) return null;
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)").matcher(s);
+    return m.find() ? m.group(1) : null;
+}

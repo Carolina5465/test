@@ -1,0 +1,234 @@
+package fast.common.glue;
+
+import io.cucumber.java.en.When;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+import java.text.Normalizer;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+
+import fast.common.steps.BaseCommonStepDefs;
+import fast.common.agents.Agent;
+import fast.common.agents.AgentsManager;
+import fast.common.steps.StepResult;
+
+import org.json.JSONObject;
+
+// XML DOM
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+public class OperationsFormsBaca extends BaseCommonStepDefs {
+
+    @When("^(\\w+) consulto_datos_SDF(\\d+)$")
+    public void cargandoDatosOPF(String nombreArchivo, String identificador) throws Exception {
+
+        // 1) Ruta del identificador
+        Path rutaId = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+        if (!Files.exists(rutaId)) {
+            throw new Exception("[OPF] No existe el archivo " + rutaId.toAbsolutePath());
+        }
+        String id = Files.readString(rutaId, StandardCharsets.UTF_8).trim();
+        if (id == null || id.isBlank()) {
+            throw new Exception("[OPF] El identificador leído está vacío.");
+        }
+        id = id.replaceAll("[^0-9]", "").trim();
+        System.out.println("[OPF] Numero identificador obtenido: " + id);
+
+        // 2) Ruta del archivo de entrada (puede ser JSON o XML)
+        Path rutaEntrada = Path.of(System.getProperty("user.dir"), nombreArchivo);
+        if (!Files.exists(rutaEntrada)) {
+            throw new Exception("[OPF] No existe el archivo de entrada: " + rutaEntrada.toAbsolutePath());
+        }
+
+        // 3) Cargar KV dinámico desde JSON o XML (Opción B integrada)
+        Map<String, String> kv;
+        String lower = nombreArchivo.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".xml")) {
+            // --- LECTURA XML (elige la sección correcta: "servicioOtros" o "root") ---
+            // Si tus tags están dentro de <servicioOtros> usa ese nombre. Si están directo bajo <root>, usa "root".
+            String xmlSection = "servicioOtros"; // <-- cámbialo a "root" si aplica
+            kv = readSimpleXmlToMap(rutaEntrada, xmlSection);
+            System.out.println("[XML] Total de campos: " + kv.size());
+        } else {
+            // --- LECTURA JSON (flujo original) ---
+            String json = Files.readString(rutaEntrada, StandardCharsets.UTF_8).trim();
+            kv = JsonUtils.parseJsonToMap(json);
+            System.out.println("[JSON] Total de campos: " + kv.size());
+        }
+
+        // Loguear KV
+        for (Map.Entry<String, String> e : kv.entrySet()) {
+            System.out.println("[KV] " + e.getKey() + " = " + e.getValue());
+        }
+
+        // 4) Campos mínimos para el WHERE
+        String numeroDeclaracion = kv.get("numeroDeclaracion");
+        String fechaDeclaracion  = kv.get("fechaDeclaracion");
+
+        if (numeroDeclaracion == null || numeroDeclaracion.isBlank()) {
+            throw new Exception("[OPF] Entrada no contiene numeroDeclaracion.");
+        }
+        if (fechaDeclaracion == null || fechaDeclaracion.isBlank()) {
+            throw new Exception("[OPF] Entrada no contiene fechaDeclaracion.");
+        }
+
+        // 5) Formatear fecha a DD-MMM-YY (Oracle)
+        String fechaFormateada = DateUtils.toDDMMYY(fechaDeclaracion);
+        System.out.println("[OPF] FECHA FORMATEADA PARA CONSULTA: " + fechaFormateada);
+
+        // Variables dinámicas de tabla y columnas
+        String tabla;
+        String idCol1;
+        String dateCol1;
+
+        switch (id) {
+            case "1":
+                tabla = "BAC_FIVA_FOR_IMPORT_BIENES";
+                idCol1 = "DIB_NUM_DEC_INIC";
+                dateCol1 = "DIB_DFECHA_DEC_INIC";
+                break;
+            case "2":
+                tabla = "BAC_F2VAL_FOR_DECLA_EXPORT_BIEN";
+                idCol1 = "DBE_NUM_DEC_INIC";
+                dateCol1 = "DBE_DFECHA_DEC_INIC";
+                break;
+            case "3":
+                tabla = "BAC_F3VAL_FOR_ENDEUDA_EXTER";
+                idCol1 = "DEE_NUM_DEC_INIC";
+                dateCol1 = "DEE_DFECHA_DEC_INIC";
+                break;
+            case "4":
+                tabla = "BAC_F4VAL_FOR_INV_INTERNALES";
+                idCol1 = "DIT_NUM_DEC_INIC";
+                dateCol1 = "DIT_DFECHA_DEC_INIC";
+                break;
+            case "5":
+                tabla = "BAC_F5VAL_FOR_SERV_TRANSF_OTROS";
+                idCol1 = "DST_NUM_DEC_INIC";
+                dateCol1 = "DST_DFECHA_DEC_INIC";
+                break;
+            default:
+                throw new IllegalArgumentException("Identificador de formulario desconocido: " + id);
+        }
+
+        // 6) SQL que devuelve la fila como JSON
+        String sql =
+            "SELECT JSON_OBJECT(*) AS ROW_JSON FROM " + tabla + " t " +
+            "WHERE t." + idCol1 + " LIKE '%" + numeroDeclaracion + "%' " +
+            "AND TRUNC(t." + dateCol1 + ") = TO_DATE('" + fechaFormateada + "', 'DD-MON-RR', 'NLS_DATE_LANGUAGE=ENGLISH') " +
+            "FETCH FIRST 1 ROWS ONLY";
+
+        System.out.println("[BD] SQL consulta construida: " + sql);
+
+        // 7) Ejecutar SQL con agente de BD
+        Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent("dbAgent");
+        StepResult db = dbAgent.runWithResult("query", new Object[]{ sql });
+        getScenarioContext().saveLastStepResult(db);
+
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+        if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+            throw new AssertionError("[BD] La consulta no devolvió filas.");
+        }
+        System.out.println("[BD] Fila BD (JSON): " + rowJson);
+
+        // 8) Validación dinámica (comparar todos los valores de la entrada contra la fila BD)
+        // Override para la fecha (entrada JSON/XML vs formato Oracle que viene en rowJson)
+        Map<String, String> overrides = new HashMap<>();
+        overrides.put("fechaDeclaracion", fechaFormateada);
+
+        String haystack = normalize(rowJson);
+        for (Map.Entry<String, String> e : kv.entrySet()) {
+            String key = e.getKey();
+            String raw  = e.getValue();
+            String value = overrides.getOrDefault(key, raw);
+
+            if (value == null || value.isEmpty()) continue;
+
+            String needle = normalize(value);
+
+            // Probar con y sin espacios (por si la BD lo serializa distinto)
+            boolean ok = haystack.contains(needle) || haystack.contains(needle.replaceAll("\\s+", ""));
+            if (ok) {
+                System.out.println("[OK] Encontrado en fila BD  clave=" + key + "  valor=\"" + value + "\"");
+            } else {
+                throw new AssertionError("[BD] No se encontró en fila BD  clave=" + key +
+                        "  valor=\"" + value + "\"  (normalizado=\"" + needle + "\")");
+            }
+        }
+
+        System.out.println("[OK] Todos los valores de la entrada están presentes en la fila retornada por la BD.");
+    }
+
+    // ==================================================
+    // Helpers
+    // ==================================================
+    private static String normalize(String s) {
+        if (s == null) return "";
+        String u = Normalizer.normalize(s.toUpperCase(Locale.ROOT), Normalizer.Form.NFD);
+        // quita acentos, colapsa espacios
+        return u.replaceAll("\\p{M}", "").replaceAll("\\s+", " ").trim();
+    }
+
+    /** Lee tags directos de un XML dentro de una sección y devuelve un Map */
+    static Map<String, String> readSimpleXmlToMap(Path xmlPath, String sectionTag) throws Exception {
+        Map<String, String> out = new LinkedHashMap<>();
+
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(false);
+        dbf.setExpandEntityReferences(false);
+
+        Document doc = dbf.newDocumentBuilder().parse(xmlPath.toFile());
+        doc.getDocumentElement().normalize();
+
+        NodeList sections = doc.getElementsByTagName(sectionTag);
+        if (sections.getLength() == 0) return out;
+
+        Node sec = sections.item(0);
+        NodeList children = sec.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() == Node.ELEMENT_NODE) {
+                String key = n.getNodeName();
+                String val = n.getTextContent() == null ? "" : n.getTextContent().trim();
+                out.put(key, val);
+            }
+        }
+        return out;
+    }
+
+    /** Parser simple (flat) de JSON → Map<String,String> usando org.json */
+    static class JsonUtils {
+        static Map<String, String> parseJsonToMap(String json) {
+            Map<String, String> map = new HashMap<>();
+            JSONObject obj = new JSONObject(json);
+            for (String key : obj.keySet()) {
+                Object v = obj.opt(key);
+                map.put(key, v == null ? "" : String.valueOf(v));
+            }
+            return map;
+        }
+    }
+}
+
+// ==================================================
+// Utilidades para fechas
+// ==================================================
+class DateUtils {
+    private static final DateTimeFormatter INPUT  = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter OUTPUT = DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH);
+
+    static String toDDMMYY(String fechaJson) {
+        return LocalDate.parse(fechaJson, INPUT).format(OUTPUT).toUpperCase(Locale.ENGLISH);
+    }
+}

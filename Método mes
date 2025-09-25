@@ -1,0 +1,111 @@
+@When("^(\\w+) selecciona el mes '([^']+)' en el input '([^']+)'$")
+public void seleccionaMesSoloMes(String agenteName, String varFecha, String inputLocator) throws Exception {
+
+    // ============================
+    // 1) Tomar el valor de la fecha desde múltiples orígenes
+    // ============================
+    Object raw = null;
+
+    // 1.a) ScenarioContext (thread local del escenario)
+    try {
+        var sc = getScenarioContext();
+        if (sc != null) {
+            // usa el getter que tengas disponible en tu framework
+            raw = sc.getThreadParam(varFecha);
+            if (raw == null) raw = sc.getVariable(varFecha); // por si tu clase lo expone
+        }
+    } catch (Throwable ignore) { /* continuar */ }
+
+    // 1.b) GlobalContext (si tu framework lo usa)
+    if (raw == null) {
+        try {
+            // Si tienes importado tu GlobalContext, usa la llamada directa:
+            // raw = GlobalContext.get(varFecha);
+            // Si no, usa reflexión para no acoplar:
+            Class<?> gc = Class.forName("fast.common.context.GlobalContext");
+            java.lang.reflect.Method get = null;
+            for (var m : gc.getMethods()) {
+                if (m.getName().equals("get") && m.getParameterCount() == 1) { get = m; break; }
+                if (m.getName().equals("getVariable") && m.getParameterCount() == 1) { get = m; break; }
+            }
+            if (get != null) raw = get.invoke(null, varFecha);
+        } catch (Throwable ignore) { /* continuar */ }
+    }
+
+    // 1.c) Fallback: leer del JSON que generamos al aplanar el XML
+    if (raw == null) {
+        Path outJson = Paths.get(System.getProperty("user.dir"), "ultimo_xml_OPF.json");
+        if (Files.exists(outJson)) {
+            String j = Files.readString(outJson, StandardCharsets.UTF_8);
+            org.json.JSONObject obj = new org.json.JSONObject(j);
+            if (obj.has(varFecha)) raw = obj.get(varFecha);
+        }
+    }
+
+    if (raw == null) {
+        throw new Exception("Variable no encontrada: '" + varFecha +
+                "' (ScenarioContext / GlobalContext / ultimo_xml_OPF.json).");
+    }
+
+    String s = String.valueOf(raw).trim();
+    System.out.println("[FECHA] Valor recuperado para '" + varFecha + "': " + s);
+
+    // ============================
+    // 2) Calcular el número de mes (1-12) a partir de s
+    //    Acepta: yyyy-MM-dd | dd-MMM-yy | dd/MM/yyyy | dd-MM-yyyy
+    // ============================
+    int month = parseMonthFromAny(s);
+    System.out.println("[FECHA] Mes numérico: " + month);
+
+    // ============================
+    // 3) (tu lógica original) Click que abre el calendario, etc.
+    // ============================
+    String methodName = "clickcontrol"; // como lo tenías
+    AgentsManager.getInstance().getOrCreateAgent(agenteName)
+                 .run(methodName, new Object[]{ inputLocator });
+
+    // 4) XPaths del desplegable/calendario (deja lo tuyo aquí)
+    String xpVisible = "//*[@id='controlesFecha' and contains(@style,'display: block')]";
+    String xpSwitch  = "//*[@role='combobox' and @name='mes']"; // ejemplo, deja tus propios XPaths
+
+    // 5) Abrir el combo de mes si aplica (como ya lo tenías)
+    AgentsManager.getInstance().getOrCreateAgent(agenteName)
+                 .run(methodName, new Object[]{ xpVisible });
+
+    // 6) Seleccionar el mes por abreviatura (ene, feb, mar...)
+    String[] abbr = { "", "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic" };
+    String mesAbbr = abbr[month];
+    // si tu método de selección es otro, usa el tuyo:
+    AgentsManager.getInstance().getOrCreateAgent(agenteName)
+                 .run("clickcombo", new Object[]{ xpSwitch, mesAbbr });
+
+    System.out.println("[OK] Seleccionado mes '" + mesAbbr + "' para valor '" + s + "'.");
+}
+
+/* ======================= Helpers ======================= */
+
+/** Intenta parsear una fecha en distintos formatos y devuelve el mes (1..12). */
+private static int parseMonthFromAny(String s) throws Exception {
+    s = s.trim();
+    // Normalizar meses tipo "17-SEP-25" → necesitamos ENGLISH
+    DateTimeFormatter[] fmts = new DateTimeFormatter[]{
+        DateTimeFormatter.ofPattern("yyyy-MM-dd"),                                // 2025-09-09
+        DateTimeFormatter.ofPattern("dd/MM/yyyy"),                                // 09/09/2025
+        DateTimeFormatter.ofPattern("dd-MM-yyyy"),                                // 09-09-2025
+        DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH),                 // 09-SEP-25
+        DateTimeFormatter.ofPattern("dd-MMM-yyyy", Locale.ENGLISH)                // 09-SEP-2025
+    };
+    for (DateTimeFormatter f : fmts) {
+        try {
+            return LocalDate.parse(s, f).getMonthValue();
+        } catch (Exception ignore) { /* probar siguiente */ }
+    }
+    // Si no pudo, intenta extraer mes numérico simple (último recurso)
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:^|\\D)(1[0-2]|0?[1-9])(?!\\d)")
+            .matcher(s);
+    if (m.find()) {
+        int mm = Integer.parseInt(m.group(1));
+        if (mm >= 1 && mm <= 12) return mm;
+    }
+    throw new Exception("Formato de fecha no reconocido: " + s);
+}

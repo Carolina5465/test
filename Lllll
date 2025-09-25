@@ -1,0 +1,26 @@
+// 1) Obtener texto crudo de la celda
+String identificadorRaw = String.valueOf(result.getFieldValue("value")).trim();
+System.out.println("[INFO] Texto crudo leído de la celda: '" + identificadorRaw + "'");
+
+// 2) Extraer el primer número (solo dígitos) del texto
+String soloNumero = extraerPrimerEntero(identificadorRaw);
+if (soloNumero == null || soloNumero.isEmpty()) {
+    throw new Exception("No se encontró un número en el identificador leído: '"
+            + identificadorRaw + "' para numeroDeclaracion=" + numeroIndicadorActual);
+}
+System.out.println("[OK] Identificador (solo número) = " + soloNumero);
+
+// 3) Publicar en contexto con una clave FIJA y legible
+getScenarioContext().setVariable("identificador", soloNumero);
+try { GlobalContext.set("identificador", soloNumero); } catch (Throwable ignore) {}
+
+// 4) Guardar en archivo TXT en la raíz del proyecto
+Path outFile = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+Files.writeString(
+        outFile,
+        soloNumero,                           // si quieres uno por línea usa soloNumero + System.lineSeparator()
+        StandardCharsets.UTF_8,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.TRUNCATE_EXISTING  // reemplaza el contenido anterior
+);
+System.out.println("[OK] Identificador guardado en: " + outFile.toAbsolutePath());

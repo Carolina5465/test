@@ -1,0 +1,7 @@
+Path xmlPath = Paths.get("ruta", "al", "Archivo.xml"); // el que muestras en la captura
+Map<String,String> kv = readSimpleXmlToMap(xmlPath, "servicioOtros"); // o "root" según tu estructura
+
+System.out.println("[XML] Campos leídos = " + kv.size());
+kv.forEach((k,v) -> System.out.println("[XML] " + k + " = " + v));
+
+// Ahora kv contendrá: numeroDeclaracion, fechaDeclaracion, nitMC, valorTotalMonedaNegociacion, etc.

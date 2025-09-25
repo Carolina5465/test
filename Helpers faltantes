@@ -1,0 +1,83 @@
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
+
+/** Recorre recursivamente el XML y llena 'out' con claves "path.tag" (también atributos "@attr"). */
+private static void flattenXml(Node node, String path, Map<String, String> out) {
+    // 1) Atributos del nodo como keys "path@attr"
+    if (node.hasAttributes()) {
+        NamedNodeMap atts = node.getAttributes();
+        for (int i = 0; i < atts.getLength(); i++) {
+            Node a = atts.item(i);
+            String k = path + "@" + a.getNodeName();
+            putUniqueIfDiff(out, k, a.getNodeValue());
+        }
+    }
+
+    // 2) Hijos elemento
+    NodeList children = node.getChildNodes();
+    List<Element> elemChildren = new ArrayList<>();
+    for (int i = 0; i < children.getLength(); i++) {
+        Node n = children.item(i);
+        if (n.getNodeType() == Node.ELEMENT_NODE) elemChildren.add((Element) n);
+    }
+
+    if (elemChildren.isEmpty()) {
+        // Hoja: guardar texto si no está vacío
+        String text = node.getTextContent() == null ? "" : node.getTextContent().trim();
+        if (!text.isEmpty()) putUniqueIfDiff(out, path, text);
+        return;
+    }
+
+    // Recurse
+    for (Element e : elemChildren) {
+        String tag = e.getNodeName().replaceAll("\\s+", "");
+        flattenXml(e, path + "." + tag, out);
+    }
+}
+
+/** Convierte 'root.servicioOtro.fechaDeclaracion' -> 'OPF_fechaDeclaracion'. */
+private static String toOpfShortKey(String fullPath) {
+    if (fullPath == null || fullPath.isBlank()) return "OPF_";
+    String last = fullPath;
+    int idx = fullPath.lastIndexOf('.');
+    if (idx >= 0 && idx < fullPath.length() - 1) {
+        last = fullPath.substring(idx + 1);
+    }
+    // Si es atributo 'tag@attr', nos quedamos con el nombre del atributo
+    int attrIdx = last.indexOf('@');
+    if (attrIdx >= 0 && attrIdx < last.length() - 1) {
+        last = last.substring(attrIdx + 1);
+    }
+    last = last.replaceAll("\\s+", "").replaceAll("[^A-Za-z0-9_]", "_");
+    return "OPF_" + last;
+}
+
+/** Inserta key->value; si existe con valor distinto, agrega [2], [3]… */
+private static void putUniqueIfDiff(Map<String, String> map, String key, String value) {
+    if (value == null) value = "";
+    value = value.trim();
+    if (!map.containsKey(key)) {
+        map.put(key, value);
+        return;
+    }
+    if (Objects.equals(map.get(key), value)) {
+        return; // ya existe con el mismo valor
+    }
+    int i = 2;
+    while (map.containsKey(key + "[" + i + "]")) {
+        if (Objects.equals(map.get(key + "[" + i + "]"), value)) {
+            return;
+        }
+        i++;
+    }
+    map.put(key + "[" + i + "]", value);
+}

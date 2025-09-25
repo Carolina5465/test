@@ -1,0 +1,54 @@
+@When("^AgentSIT captura identificadores para cada numeroDeclaracion usando la fila \"([^\"]+)\" y el id \"([^\"]+)\"$")
+public void capturoSoloIdentificadores(String xpathFilaTemplate, String xpathIdentificador) throws Exception {
+    // 0) Archivo de entrada con TODOS los numerosDeclaracion
+    Path in = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadorXML.txt");
+    if (!Files.exists(in)) {
+        throw new Exception("[ID] No existe numeros_formularios_generadorXML.txt en: " + in.toAbsolutePath());
+    }
+
+    // 1) Leemos todas las líneas (numerosDeclaracion)
+    List<String> numeros = Files.readAllLines(in, StandardCharsets.UTF_8);
+    numeros.removeIf(s -> s == null || s.trim().isEmpty());
+    if (numeros.isEmpty()) {
+        throw new Exception("[ID] El archivo de numerosDeclaracion está vacío: " + in.toAbsolutePath());
+    }
+
+    // 2) Agente UI
+    Agent ui = AgentsManager.getInstance().getOrCreateAgent("AgentSIT");
+
+    // 3) Archivo de salida (sólo números identificadores)
+    Path out = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+    Files.writeString(out, "", StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+    // 4) Procesar cada numeroDeclaracion
+    for (String raw : numeros) {
+        String numero = raw.trim();
+        String filaXpath = xpathFilaTemplate.replace("{NUM}", numero);
+
+        // Click en la fila (si aplica en tu flujo)
+        try {
+            ui.run("clickControl", new Object[]{ filaXpath });
+        } catch (Throwable t) {
+            throw new Exception("[ID] No se pudo clickear la fila del numeroDeclaracion=" + numero + " usando XPATH=" + filaXpath, t);
+        }
+
+        // Leer el identificador
+        StepResult read = ui.runWithResult("readTextOnControl", new Object[]{ xpathIdentificador });
+        if (read == null) {
+            throw new Exception("[ID] readTextOnControl devolvió null para numeroDeclaracion=" + numero);
+        }
+        String valor = String.valueOf(read.getFieldValue("value"));
+        if (valor == null) valor = "";
+        String identificador = valor.replaceAll("[^0-9]", "").trim(); // nos quedamos sólo con dígitos
+        if (identificador.isEmpty()) {
+            throw new Exception("[ID] Identificador vacío/ilegal para numeroDeclaracion=" + numero + " (valor leído: '" + valor + "')");
+        }
+
+        System.out.println("[ID] Identificador capturado=" + identificador);
+
+        // Guardar solo el número (1, 2, …)
+        Files.write(out, (identificador + System.lineSeparator()).getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+    }
+
+    System.out.println("[OK] Identificadores guardados en: " + out.toAbsolutePath());
+}

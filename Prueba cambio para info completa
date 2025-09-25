@@ -1,0 +1,29 @@
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.w3c.dom.*;
+
+public static Map<String,String> readSimpleXmlToMap(Path xmlPath, String sectionTag) throws Exception {
+    Map<String,String> out = new LinkedHashMap<>();
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    dbf.setExpandEntityReferences(false);
+
+    Document doc = dbf.newDocumentBuilder().parse(xmlPath.toFile());
+    doc.getDocumentElement().normalize();
+
+    // Si tus campos están dentro de <servicioOtros>, pásalo en sectionTag.
+    // Si están directo bajo <root>, usa "root".
+    NodeList sections = doc.getElementsByTagName(sectionTag);
+    if (sections.getLength() == 0) return out;
+
+    Node sec = sections.item(0);
+    NodeList children = sec.getChildNodes();
+    for (int i = 0; i < children.getLength(); i++) {
+        Node n = children.item(i);
+        if (n.getNodeType() == Node.ELEMENT_NODE) {
+            String key = n.getNodeName();
+            String val = n.getTextContent() == null ? "" : n.getTextContent().trim();
+            out.put(key, val);
+        }
+    }
+    return out;
+}

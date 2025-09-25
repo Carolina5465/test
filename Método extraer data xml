@@ -1,0 +1,141 @@
+// ====== IMPORTS ======
+// Asegúrate de tener estos imports arriba:
+import org.w3c.dom.*;
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.Collectors;
+
+// ============================================================
+// 1) EXTRAER DEL ÚLTIMO XML Y GUARDAR TODOS LOS CAMPOS EN JSON
+// ============================================================
+/**
+ * Busca el XML más reciente en {carpetaRelativa} (opcionalmente filtrando por prefijo),
+ * lo parsea y aplana TODOS los tags a un Map<String,String>,
+ * y guarda ese Map en {nombreJsonSalida} (ej: "ultimo_xml_OPF.json") en el directorio del proyecto.
+ */
+public void extraerTodoDelUltimoXMLyGuardarJSON(String carpetaRelativa,
+                                                String prefijoOpcional,
+                                                String nombreJsonSalida) throws Exception {
+    // 1) Carpeta
+    Path dir = Paths.get(System.getProperty("user.dir"), carpetaRelativa);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("[XML] Carpeta no válida: " + dir.toAbsolutePath());
+    }
+
+    // 2) XML más reciente (filtrando por prefijo si viene)
+    try (var stream = Files.list(dir)) {
+        Comparator<Path> byMtime = Comparator.comparingLong(p -> p.toFile().lastModified());
+
+        Optional<Path> ultimoXml = stream
+                .filter(p -> p.toString().toLowerCase(Locale.ROOT).endsWith(".xml"))
+                .filter(p -> prefijoOpcional == null || prefijoOpcional.isBlank()
+                        || p.getFileName().toString().startsWith(prefijoOpcional))
+                .max(byMtime);
+
+        if (ultimoXml.isEmpty()) {
+            throw new Exception("[XML] No se encontraron XML en " + dir.toAbsolutePath()
+                    + (prefijoOpcional == null ? "" : " con prefijo '" + prefijoOpcional + "'"));
+        }
+
+        Path xmlPath = ultimoXml.get();
+        System.out.println("[XML] Usando archivo más reciente: " + xmlPath.getFileName()
+                + " (mtime=" + Files.getLastModifiedTime(xmlPath) + ")");
+
+        // 3) Parsear documento
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(false);
+        dbf.setExpandEntityReferences(false);
+        Document doc = dbf.newDocumentBuilder().parse(xmlPath.toFile());
+        doc.getDocumentElement().normalize();
+
+        // 4) Aplanar TODO el árbol XML a un Map
+        Map<String, String> flat = new LinkedHashMap<>();
+        // La clave resultará como "root.servicioOtros.nitMC", etc.
+        flattenXml(doc.getDocumentElement(), doc.getDocumentElement().getNodeName(), flat);
+
+        System.out.println("[XML] Campos leídos y aplanados: " + flat.size());
+        flat.forEach((k, v) -> System.out.println("[XML] " + k + " = " + v));
+
+        // 5) Opcional: si quieres "simplificar" las claves (quitar el path y dejar solo el último tag),
+        //    descomenta este bloque:
+        /*
+        Map<String,String> simple = new LinkedHashMap<>();
+        for (var e : flat.entrySet()) {
+            String key = e.getKey();
+            String last = key.contains(".") ? key.substring(key.lastIndexOf('.') + 1) : key;
+            // Si hay colisiones de nombre, conservamos la primera aparición
+            simple.putIfAbsent(last, e.getValue());
+        }
+        Map<String,String> aGuardar = simple;
+        */
+
+        // Por defecto guardamos con claves completas (sin perder nada)
+        Map<String,String> aGuardar = flat;
+
+        // 6) Guardar JSON en el directorio del proyecto, mismo nombre que ya usa tu consulta
+        Path outJson = Paths.get(System.getProperty("user.dir"), nombreJsonSalida);
+        String json = mapToJson(aGuardar);           // genera JSON (sin librerías externas)
+        Files.writeString(outJson, json, StandardCharsets.UTF_8);
+
+        System.out.println("[JSON] Guardado en: " + outJson.toAbsolutePath());
+    }
+}
+
+/**
+ * Recorre el árbol XML recursivamente y carga en 'out' claves "path.tag" con el texto de los elementos hoja.
+ * - Ignora nodos vacíos (texto en blanco).
+ * - Para elementos repetidos con el mismo path, agrega sufijo [1], [2], ...
+ */
+private static void flattenXml(Node node, String path, Map<String, String> out) {
+    NodeList children = node.getChildNodes();
+
+    // ¿Tiene hijos elemento?
+    List<Element> elementChildren = new ArrayList<>();
+    for (int i = 0; i < children.getLength(); i++) {
+        Node n = children.item(i);
+        if (n.getNodeType() == Node.ELEMENT_NODE) elementChildren.add((Element) n);
+    }
+
+    if (elementChildren.isEmpty()) {
+        // Es hoja (o solo texto); tomar contenido
+        String text = node.getTextContent() == null ? "" : node.getTextContent().trim();
+        if (!text.isEmpty()) {
+            // Resolver colisiones: si ya existe la clave, versionar
+            if (out.containsKey(path)) {
+                int idx = 2;
+                while (out.containsKey(path + "[" + idx + "]")) idx++;
+                out.put(path + "[" + idx + "]", text);
+            } else {
+                out.put(path, text);
+            }
+        }
+        return;
+    }
+
+    // Recurse sobre hijos elemento
+    for (Element e : elementChildren) {
+        String tag = e.getNodeName();
+        // Normaliza un poco el nombre de tag si quieres
+        String clean = tag.replaceAll("\\s+", "");
+        flattenXml(e, path + "." + clean, out);
+    }
+}
+
+/** Convierte un Map<String,String> en un JSON plano (sin dependencias). */
+private static String mapToJson(Map<String, String> map) {
+    // Si ya tienes org.json, puedes hacer: return new JSONObject(map).toString(2);
+    // Aquí lo hacemos a mano para no depender de libs:
+    String body = map.entrySet().stream()
+            .map(e -> "  \"" + escapeJson(e.getKey()) + "\": \"" + escapeJson(e.getValue()) + "\"")
+            .collect(Collectors.joining(",\n"));
+    return "{\n" + body + "\n}\n";
+}
+
+private static String escapeJson(String s) {
+    if (s == null) return "";
+    return s.replace("\\", "\\\\").replace("\"", "\\\"")
+            .replace("\r", "\\r").replace("\n", "\\n");
+}

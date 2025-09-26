@@ -1,0 +1,179 @@
+@When("(.*) cargandoDatosOPF (.*)")
+public void cargandoDatosOPF(String agentName, String nombreArchivo, String varName) throws Exception {
+
+    // ======= A) Leer listas desde archivos =======
+    Path rutaIds  = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+    Path rutaNums = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadorXML.txt");
+
+    if (!Files.exists(rutaIds))  throw new Exception("[OPF] No existe identificador_generadoXML.txt en: " + rutaIds.toAbsolutePath());
+    if (!Files.exists(rutaNums)) throw new Exception("[OPF] No existe numeros_formularios_generadorXML.txt en: " + rutaNums.toAbsolutePath());
+
+    // ids: solo dígitos, 1 por línea
+    List<String> ids = Files.readAllLines(rutaIds, StandardCharsets.UTF_8).stream()
+            .map(s -> s == null ? "" : s.trim())
+            .filter(s -> !s.isBlank())
+            .map(s -> s.replaceAll("[^0-9]", "")) // deja solo números
+            .filter(s -> !s.isBlank())
+            .toList();
+
+    // numerosDeclaracion: solo dígitos, 1 por línea
+    List<String> numeros = Files.readAllLines(rutaNums, StandardCharsets.UTF_8).stream()
+            .map(s -> s == null ? "" : s.trim())
+            .filter(s -> !s.isBlank())
+            .map(s -> s.replaceAll("[^0-9]", ""))
+            .filter(s -> !s.isBlank())
+            .toList();
+
+    if (ids.isEmpty())     throw new Exception("[OPF] La lista de identificadores está vacía.");
+    if (numeros.isEmpty()) throw new Exception("[OPF] La lista de numerosDeclaracion está vacía.");
+
+    int n = Math.min(ids.size(), numeros.size());
+    if (ids.size() != numeros.size()) {
+        System.out.println("[WARN] Cantidades distintas: ids=" + ids.size() + ", numeros=" + numeros.size()
+                + ". Se procesarán " + n + " pares (hasta el mínimo).");
+    }
+
+    // ======= B) Leer y preparar JSON una sola vez =======
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+    if (!Files.exists(rutaJson)) {
+        throw new Exception("[OPF] No existe el archivo JSON: " + rutaJson.toAbsolutePath());
+    }
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+
+    Map<String, String> kv = JsonUtils.parseFlatJsonToMap(json); // tu utilitario ya existente
+    System.out.println("[JSON] Campos en " + nombreArchivo + ": " + kv.size());
+
+    String fechaDeclaracion = kv.get("OPF fechaDeclaracion");
+    if (fechaDeclaracion == null || fechaDeclaracion.isBlank()) {
+        throw new Exception("[OPF] JSON no trae OPF fechaDeclaracion.");
+    }
+    String fechaFormateada = DateUtils.toOracleDayMonYY(fechaDeclaracion);
+
+    // Preparar agente BD una sola vez
+    Agent dbAgent = AgentsManager.getOrCreateAgent(agentName);
+
+    List<String> errores = new ArrayList<>();
+
+    // ======= C) Iterar por cada (numeroDeclaracion, id) =======
+    for (int i = 0; i < n; i++) {
+        String numeroDeclaracion = numeros.get(i);
+        String id = ids.get(i);
+
+        System.out.println("[INFO] Procesando par " + (i+1) + "/" + n
+                + " -> numeroDeclaracion=" + numeroDeclaracion + ", id=" + id);
+
+        try {
+            // --- 1) Resolver tabla/columnas por ID (switch sin cambios grandes)
+            String tabla, idCol1, dateCol1;
+            switch (id) {
+                case "1":
+                    tabla   = "BAC_FVA_FOR_IMPORT_BIENES";
+                    idCol1  = "DII_NUM_DEC_INIC";
+                    dateCol1= "DII_FECHA_DEC_INIC";
+                    break;
+                case "2":
+                    tabla   = "BAC_FVA_FOR_IMPORT_BIENES";
+                    idCol1  = "DII_NUM_DEC_INIC";
+                    dateCol1= "DII_FECHA_DEC_INIC";
+                    break;
+                case "3":
+                    tabla   = "BAC_FVA_FMV_ENDEUDA_EXTER";
+                    idCol1  = "DEE_NUM_DEC_INIC";
+                    dateCol1= "DEE_FECHA_DEC_INIC";
+                    break;
+                case "4":
+                    tabla   = "BAC_FVA_FMV_INV_INTERNACIONALES";
+                    idCol1  = "DII_NUM_DEC_INIC";
+                    dateCol1= "DII_FECHA_DEC_INIC";
+                    break;
+                case "5":
+                    tabla   = "BAC_FVA_FOR_SERV_TRANSF_OTROS";
+                    idCol1  = "DST_NUM_DEC_INIC";
+                    dateCol1= "DST_FECHA_DEC_INIC";
+                    break;
+                default:
+                    throw new IllegalArgumentException("Identificador de formulario desconocido: " + id);
+            }
+
+            // --- 2) SQL por par
+            String sql =
+                "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+                "FROM " + tabla + " " +
+                "WHERE " + idCol1 + " LIKE '%" + numeroDeclaracion + "%' " +
+                "AND " + dateCol1 + " = '" + fechaFormateada + "' " +
+                "FETCH FIRST 1 ROWS ONLY";
+
+            System.out.println("[BD] SQL -> " + sql);
+
+            // --- 3) Ejecutar y obtener JSON de la fila
+            StepResult db = dbAgent.runWithResult("query", new Object[]{sql});
+            getScenarioContext().saveLastStepResult(db, varName); // mantenemos compat.
+
+            String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+            if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+                rowJson = String.valueOf(db.getFieldValue("row_json"));
+            }
+            if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+                throw new AssertionError("[BD] La consulta no devolvió datos para numero=" + numeroDeclaracion + ", id=" + id);
+            }
+            System.out.println("[BD] Fila (JSON) -> " + rowJson);
+
+            // --- 4) Validación esencial (mínima y segura)
+            //     *Puedes ampliar con más campos si tu JSON aplanado coincide con la tabla de ese id.*
+            String haystack = normalizeString(rowJson);
+
+            // Valida número y fecha (presentes en todas)
+            String ndNeedle = numeroDeclaracion; // ya solo dígitos
+            if (!haystack.replaceAll("\\D", "").contains(ndNeedle)) {
+                throw new AssertionError("[VAL] No se encontró numeroDeclaracion " + ndNeedle + " en la fila.");
+            }
+
+            String fechaNeedle = normalizeString(fechaFormateada);
+            if (!haystack.contains(fechaNeedle)) {
+                // alternativa sin separadores (por si la BD serializa distinto)
+                if (!haystack.replaceAll("[,.;:\\-/\\s]+","").contains(fechaNeedle.replaceAll("[,.;:\\-/\\s]+",""))) {
+                    throw new AssertionError("[VAL] No se encontró fechaDeclaracion " + fechaFormateada + " en la fila.");
+                }
+            }
+
+            System.out.println("[OK] Par válido -> numero=" + numeroDeclaracion + ", id=" + id);
+
+        } catch (Throwable t) {
+            String msg = "[ERROR] Falló par numero=" + numeroDeclaracion + ", id=" + id + " -> " + t.getMessage();
+            System.err.println(msg);
+            errores.add(msg);
+            // continúa con los demás
+        }
+    }
+
+    if (!errores.isEmpty()) {
+        throw new Exception("Se encontraron errores en " + errores.size() + " de " + n + " pares:\n"
+                + String.join("\n", errores));
+    }
+
+    System.out.println("[OK] Todos los pares numeroDeclaracion↔id validados correctamente.");
+}
+
+// =================== Helpers ===================
+
+/** Normaliza a mayúsculas, sin tildes, colapsa espacios */
+private static String normalizeString(String s) {
+    if (s == null) return "";
+    String u = s.toUpperCase(Locale.ROOT);
+    u = java.text.Normalizer.normalize(u, java.text.Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
+    u = u.replaceAll("[\\s]+", " ").trim();
+    return u;
+}
+
+/** Utilidades para fecha */
+static class DateUtils {
+    private static final java.time.format.DateTimeFormatter IN  =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final java.time.format.DateTimeFormatter OUT =
+            java.time.format.DateTimeFormatter.ofPattern("dd-MMM-yy", java.util.Locale.ENGLISH);
+
+    /** Convierte '2025-09-17' -> '17-SEP-25' (Oracle DD-MON-YY) */
+    static String toOracleDayMonYY(String yyyyMMdd) {
+        return java.time.LocalDate.parse(yyyyMMdd, IN).format(OUT).toUpperCase(java.util.Locale.ENGLISH);
+    }
+}

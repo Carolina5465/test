@@ -1,0 +1,86 @@
+// Lee TODOS los numeroDeclaracion desde numeros_formularios_generadorXML.txt,
+// busca el identificador correspondiente en la tabla y los guarda (solo número)
+// uno por línea en identificador_generadoXML.txt.
+@When("capturo el numero indicador del formulario y lo almaceno en la variable {word}")
+public void capturoFormularioDesdeTXT(String varName) throws Exception {
+
+    // 0) Archivos de trabajo
+    Path numerosFile = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadorXML.txt");
+    Path outFile     = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+
+    if (!Files.exists(numerosFile)) {
+        throw new Exception("El archivo numeros_formularios_generadorXML.txt no existe en: "
+                + numerosFile.toAbsolutePath());
+    }
+
+    // 1) Cargar todos los numeroDeclaracion (limpiar BOM, espacios y vacíos)
+    java.util.List<String> numeros = Files.readAllLines(numerosFile, StandardCharsets.UTF_8).stream()
+            .map(s -> s == null ? "" : s.replace("\uFEFF", "").trim())
+            .filter(s -> !s.isEmpty())
+            .collect(java.util.stream.Collectors.toList());
+
+    if (numeros.isEmpty()) {
+        throw new Exception("numeros_formularios_generadorXML.txt está vacío.");
+    }
+
+    System.out.println("[INFO] numerosDeclaracion a procesar: " + numeros);
+
+    // 2) Limpiar/crear archivo de salida (para reescribir lista desde cero)
+    Files.writeString(outFile, "", StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+    String ultimoIdentificadorSoloNumero = null;
+
+    // 3) Iterar por cada numeroDeclaracion y capturar su identificador
+    for (String numeroDeclaracion : numeros) {
+
+        // XPath igual que antes, solo que dinámico por cada número
+        String xpath = "//tr[./td/normalize-space()='" + numeroDeclaracion + "']/td[last()]";
+        System.out.println("[INFO] Procesando numeroDeclaracion=" + numeroDeclaracion);
+        System.out.println("[INFO] XPath construido: " + xpath);
+
+        StepResult result = AgentsManager.getOrCreateAgent(getAgentName())
+                .runWithResult("readTextOnControl", new Object[]{xpath});
+        if (result == null) {
+            throw new FastException("result es null");
+        }
+
+        // (opcional) conservar compatibilidad con tu contexto
+        getScenarioContext().saveLastStepResult(result, xpath);
+
+        String identificadorRaw = String.valueOf(result.getFieldValue("value")).trim();
+        System.out.println("[INFO] Texto leído de celda para " + numeroDeclaracion + " = [" + identificadorRaw + "]");
+
+        // 3.1) Extraer solo el número (primer entero que aparezca)
+        String soloNumero = extraerPrimerEntero(identificadorRaw);
+        if (soloNumero == null || soloNumero.isEmpty()) {
+            throw new Exception("No se encontró un número en el identificador leído: '" + identificadorRaw
+                    + "' para numeroDeclaracion=" + numeroDeclaracion);
+        }
+
+        // 3.2) Guardar (append) uno por línea en identificador_generadoXML.txt
+        Files.writeString(outFile, soloNumero + System.lineSeparator(), StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+
+        // 3.3) Publicar también en variables (se queda con el último valor)
+        ultimoIdentificadorSoloNumero = soloNumero;
+        try { GlobalContext.set(varName, soloNumero); } catch (Throwable ignore) {}
+        try { GlobalContext.set("identificador", soloNumero); } catch (Throwable ignore) {}
+
+        System.out.println("[OK] Identificador (solo número) para " + numeroDeclaracion + " = " + soloNumero);
+    }
+
+    // 4) Mensaje final
+    System.out.println("[OK] Identificadores guardados en: " + outFile.toAbsolutePath());
+    if (ultimoIdentificadorSoloNumero != null) {
+        System.out.println("[CTX] Último identificador publicado en GlobalContext (" + varName + ") = "
+                + ultimoIdentificadorSoloNumero);
+    }
+}
+
+// ===== Helper =====
+private static String extraerPrimerEntero(String s) {
+    if (s == null) return null;
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)").matcher(s);
+    return m.find() ? m.group(1) : null;
+}

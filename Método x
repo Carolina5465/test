@@ -1,0 +1,160 @@
+@When("(.*) cargandoDatosOPF (.*)")
+public void cargandoDatosOPF(String agentName, String nombreArchivo, String varName) throws Exception {
+
+    // ======= 1) IDs desde archivo identificador_generadoXML.txt =======
+    Path rutaId = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+    if (!Files.exists(rutaId)) {
+        throw new Exception("[OPF] No existe el archivo de identificadores: " + rutaId.toAbsolutePath());
+    }
+
+    List<String> ids = Files.readAllLines(rutaId, StandardCharsets.UTF_8).stream()
+            .map(s -> s == null ? "" : s.trim())
+            .filter(s -> !s.isBlank())
+            .map(s -> s.replaceAll("[^0-9]", ""))  // deja solo dígitos
+            .filter(s -> !s.isBlank())
+            .collect(Collectors.toList());
+
+    if (ids.isEmpty()) {
+        throw new Exception("[OPF] El archivo de IDs está vacío.");
+    }
+
+    // ======= 2) Leer JSON del step =======
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+    if (!Files.exists(rutaJson)) {
+        throw new Exception("[OPF] No existe el archivo JSON: " + rutaJson.toAbsolutePath());
+    }
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+    Map<String, String> kv = JsonUtils.parseFlatJsonToMap(json);
+
+    System.out.println("[JSON] Total de campos: " + kv.size());
+
+    // ======= 3) Iterar sobre cada ID leído =======
+    for (String id : ids) {
+        System.out.println("\n==============================");
+        System.out.println("[OPF] Procesando ID = " + id);
+
+        // 2.1 Extraer el sufijo correspondiente (ej: _1, _2...)
+        String sufijo = "_" + id;
+
+        // 2.2 Tomar número y fecha de declaración del bloque correspondiente
+        String numeroDeclaracion = kv.get("OPF numeroDeclaracion" + sufijo);
+        String fechaDeclaracion  = kv.get("OPF fechaDeclaracion" + sufijo);
+
+        if (numeroDeclaracion == null || numeroDeclaracion.isBlank()) {
+            throw new Exception("[OPF] JSON no trae numeroDeclaracion para " + sufijo);
+        }
+        if (fechaDeclaracion == null || fechaDeclaracion.isBlank()) {
+            throw new Exception("[OPF] JSON no trae fechaDeclaracion para " + sufijo);
+        }
+
+        String fechaFormateada = DateUtils.toOracleDayMonYY(fechaDeclaracion);
+        System.out.println("[OPF] Fecha formateada = " + fechaFormateada);
+
+        // 2.3 Resolver tabla y columnas según ID
+        String tabla, idCol1, dateCol1;
+        switch (id) {
+            case "1":
+            case "2":
+                tabla   = "BAC_FVA_FOR_IMPORT_BIENES";
+                idCol1  = "DII_NUM_DEC_INIC";
+                dateCol1= "DII_FECHA_DEC_INIC";
+                break;
+            case "3":
+                tabla   = "BAC_FVA_FMV_ENDEUDA_EXTER";
+                idCol1  = "DEE_NUM_DEC_INIC";
+                dateCol1= "DEE_FECHA_DEC_INIC";
+                break;
+            case "4":
+                tabla   = "BAC_FVA_FMV_INV_INTERNACIONALES";
+                idCol1  = "DII_NUM_DEC_INIC";
+                dateCol1= "DII_FECHA_DEC_INIC";
+                break;
+            case "5":
+                tabla   = "BAC_FVA_FOR_SERV_TRANSF_OTROS";
+                idCol1  = "DST_NUM_DEC_INIC";
+                dateCol1= "DST_FECHA_DEC_INIC";
+                break;
+            default:
+                throw new IllegalArgumentException("[OPF] Identificador desconocido: " + id);
+        }
+
+        // 2.4 Construir SQL dinámico
+        String sql =
+            "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+            "FROM " + tabla + " " +
+            "WHERE " + idCol1 + " LIKE '%" + numeroDeclaracion + "%' " +
+            "AND " + dateCol1 + " = '" + fechaFormateada + "' " +
+            "FETCH FIRST 1 ROWS ONLY";
+
+        System.out.println("[BD] SQL: " + sql);
+
+        // 2.5 Ejecutar
+        Agent dbAgent = AgentsManager.getOrCreateAgent(agentName);
+        StepResult db = dbAgent.runWithResult("query", new Object[]{sql});
+        getScenarioContext().saveLastStepResult(db, varName);
+
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+        if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+            rowJson = String.valueOf(db.getFieldValue("row_json"));
+        }
+        if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+            throw new AssertionError("[BD] La consulta devolvió vacío para " + sufijo);
+        }
+        System.out.println("[BD] JSON desde BD: " + rowJson);
+
+        // 2.6 Overrides (ejemplo: fecha)
+        Map<String, String> overrides = new HashMap<>();
+        overrides.put("OPF fechaDeclaracion" + sufijo, fechaFormateada);
+
+        // 2.7 Validación dinámica bloque por bloque
+        String haystack = normalizeString(rowJson);
+
+        Map<String,String> kvBlock = new LinkedHashMap<>();
+        kv.forEach((k,v) -> {
+            if (k.endsWith(sufijo)) {
+                String sinSufijo = k.substring(0, k.length() - sufijo.length());
+                kvBlock.put(sinSufijo, v);
+            }
+        });
+
+        for (Map.Entry<String,String> e : kvBlock.entrySet()) {
+            String key = e.getKey();
+            String val = e.getValue();
+            if (val == null || val.isEmpty()) continue;
+
+            String candidate = overrides.getOrDefault("OPF " + key + sufijo, val);
+            String needle    = normalizeString(candidate);
+
+            String altNeed = needle.replaceAll("[,.;:\\-/\\s]+", "");
+            String altHay  = haystack.replaceAll("[,.;:\\-/\\s]+", "");
+
+            if (haystack.contains(needle) || altHay.contains(altNeed)) {
+                System.out.println("[OK] Valor validado. Clave='" + key + "', valor='" + val + "'");
+            } else {
+                throw new AssertionError("[BD] No se encontró en BD. Clave='" + key + "', valor='" + val + "'");
+            }
+        }
+        System.out.println("[OK] Validación completada para bloque " + sufijo);
+    }
+}
+
+// =================== Helpers ===================
+
+/** Normaliza a mayúsculas, sin tildes, colapsa espacios */
+private static String normalizeString(String s) {
+    if (s == null) return "";
+    String u = s.toUpperCase(Locale.ROOT);
+    u = Normalizer.normalize(u, Normalizer.Form.NFD).replaceAll("\\p{M}+", ""); // quita acentos
+    u = u.replaceAll("[\\s]+", " ").trim();
+    return u;
+}
+
+/** Utilidades para fecha */
+static class DateUtils {
+    private static final DateTimeFormatter IN  = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter OUT = DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH);
+
+    static String toOracleDayMonYY(String yyyyMMdd) {
+        return LocalDate.parse(yyyyMMdd, IN).format(OUT).toUpperCase(Locale.ENGLISH);
+    }
+}

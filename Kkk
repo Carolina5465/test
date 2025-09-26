@@ -1,0 +1,26 @@
+StepResult result = AgentsManager.getOrCreateAgent(getAgentName())
+        .runWithResult("readTextOnControl", new Object[]{identificador_xpath});
+if (result == null) throw new Exception("El resultado del agente fue nulo");
+
+// --- TOMAR EL NÚMERO DIRECTO DEL DUMP DEL RESULTADO ---
+String dump = String.valueOf(result);                 // ej: "... identificador es: [4] ..."
+java.util.regex.Matcher m = java.util.regex.Pattern
+        .compile("(\\d+)")                            // primer grupo de dígitos que aparezca
+        .matcher(dump);
+
+if (!m.find()) {
+    throw new Exception("No se encontró un número en el StepResult: " + dump);
+}
+String soloNumero = m.group(1);                       // "4"
+
+// --- GUARDAR DIRECTO AL ARCHIVO (append una línea) ---
+java.nio.file.Path outFile = java.nio.file.Paths.get("identificador_generadoXML.txt");
+java.nio.file.Files.writeString(
+        outFile,
+        soloNumero + System.lineSeparator(),
+        java.nio.charset.StandardCharsets.UTF_8,
+        java.nio.file.StandardOpenOption.CREATE,
+        java.nio.file.StandardOpenOption.APPEND
+);
+
+System.out.println("[OK] Identificador guardado -> " + outFile.toAbsolutePath() + " = " + soloNumero);

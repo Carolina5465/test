@@ -1,0 +1,163 @@
+@When("(.*) cargandoDatosOPF (.*)")
+public void cargandoDatosOPF(String agentName, String nombreArchivo, String varName) throws Exception {
+
+    // ======= 0) Cargar listas desde TXT (1 valor por línea) =======
+    Path rutaIds  = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+    Path rutaNums = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadorXML.txt");
+    if (!Files.exists(rutaIds))  throw new Exception("[OPF] No existe identificador_generadoXML.txt en: " + rutaIds.toAbsolutePath());
+    if (!Files.exists(rutaNums)) throw new Exception("[OPF] No existe numeros_formularios_generadorXML.txt en: " + rutaNums.toAbsolutePath());
+
+    List<String> ids = Files.readAllLines(rutaIds, StandardCharsets.UTF_8).stream()
+            .map(String::trim).filter(s -> !s.isBlank())
+            .map(s -> s.replaceAll("[^0-9]", ""))
+            .filter(s -> !s.isBlank())
+            .collect(java.util.stream.Collectors.toList());
+
+    List<String> numeros = Files.readAllLines(rutaNums, StandardCharsets.UTF_8).stream()
+            .map(String::trim).filter(s -> !s.isBlank())
+            .map(s -> s.replaceAll("[^0-9]", ""))
+            .filter(s -> !s.isBlank())
+            .collect(java.util.stream.Collectors.toList());
+
+    if (ids.size() != numeros.size()) {
+        throw new Exception("[OPF] Tamaños distintos: ids=" + ids.size() + " vs numeros=" + numeros.size());
+    }
+    System.out.println("[INFO] Pares a procesar (id,numDec): " + ids.size());
+
+    // ======= 1) Leer JSON y aplanarlo como ya lo haces =======
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+    if (!Files.exists(rutaJson)) {
+        throw new Exception("[OPF] No existe el archivo JSON: " + rutaJson.toAbsolutePath());
+    }
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+    Map<String,String> kv = JsonUtils.parseFlatJsonToMap(json);
+
+    // Helpers locales pequeñitos
+    java.util.function.Function<String,String> onlyDigits = s -> s == null ? "" : s.replaceAll("[^0-9]", "");
+    java.util.function.Function<String,String> suffixOfKey = key -> {
+        int p = key.lastIndexOf('_');
+        return (p >= 0 && p < key.length()-1) ? key.substring(p+1) : null;
+    };
+
+    Agent dbAgent = AgentsManager.getOrCreateAgent(agentName);
+
+    // ======= 2) Iterar por cada formulario =======
+    for (int i = 0; i < numeros.size(); i++) {
+        String id = ids.get(i);                 // "1".."5"
+        String numeroDeclaracion = numeros.get(i);
+
+        System.out.println("[INFO] ------------------------------------------------------------------");
+        System.out.println("[INFO] Procesando id=" + id + " numDec=" + numeroDeclaracion);
+
+        // 2.1) Encontrar el sufijo del bloque en el JSON que corresponde a este numeroDeclaracion
+        String sufijo = null;
+        for (Map.Entry<String,String> e : kv.entrySet()) {
+            String k = e.getKey(), v = e.getValue();
+            if (k.startsWith("OPF numeroDeclaracion_") && onlyDigits.apply(v).equals(numeroDeclaracion)) {
+                sufijo = suffixOfKey.apply(k); // p.ej. "1", "2", "3"
+                break;
+            }
+        }
+        if (sufijo == null) {
+            throw new Exception("[OPF] No se encontró en el JSON un bloque para numeroDeclaracion=" + numeroDeclaracion);
+        }
+
+        // 2.2) Extraer la fecha del mismo bloque y formatearla para Oracle
+        String fechaDeclaracion = kv.get("OPF fechaDeclaracion_" + sufijo);
+        if (fechaDeclaracion == null || fechaDeclaracion.isBlank()) {
+            throw new Exception("[OPF] JSON no trae OPF fechaDeclaracion_" + sufijo + " para numDec " + numeroDeclaracion);
+        }
+        String fechaFormateada = DateUtils.toOracleDayMonYY(fechaDeclaracion);
+        System.out.println("[OPF] Sufijo=" + sufijo + " fecha=" + fechaDeclaracion + " -> " + fechaFormateada);
+
+        // 2.3) Construir sub-mapa del bloque _k, quitando el sufijo para validar como antes
+        Map<String,String> kvBlock = new LinkedHashMap<>();
+        String suffixToken = "_" + sufijo;
+        kv.forEach((k,v) -> {
+            if (k.startsWith("OPF ") && k.endsWith(suffixToken)) {
+                kvBlock.put(k.substring(0, k.length() - suffixToken.length()), v); // sin _k
+            }
+        });
+
+        // 2.4) Resolver tabla/columnas según identificador (sin tocar tu mapping)
+        String tabla, idCol1, dateCol1;
+        switch (id) {
+            case "1":
+                tabla   = "BAC_FVA_FOR_IMPORT_BIENES";
+                idCol1  = "DII_NUM_DEC_INIC";
+                dateCol1= "DII_FECHA_DEC_INIC";
+                break;
+            case "2":
+                tabla   = "BAC_FVA_FOR_IMPORT_BIENES";
+                idCol1  = "DII_NUM_DEC_INIC";
+                dateCol1= "DII_FECHA_DEC_INIC";
+                break;
+            case "3":
+                tabla   = "BAC_FVA_FMV_ENDEUDA_EXTER";
+                idCol1  = "DEE_NUM_DEC_INIC";
+                dateCol1= "DEE_FECHA_DEC_INIC";
+                break;
+            case "4":
+                tabla   = "BAC_FVA_FMV_INV_INTERNACIONALES";
+                idCol1  = "DII_NUM_DEC_INIC";
+                dateCol1= "DII_FECHA_DEC_INIC";
+                break;
+            case "5":
+                tabla   = "BAC_FVA_FOR_SERV_TRANSF_OTROS";
+                idCol1  = "DST_NUM_DEC_INIC";
+                dateCol1= "DST_FECHA_DEC_INIC";
+                break;
+            default:
+                throw new IllegalArgumentException("Identificador de formulario desconocido: " + id);
+        }
+
+        // 2.5) SQL (misma idea que tenías)
+        String sql =
+            "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+            "FROM " + tabla + " " +
+            "WHERE " + idCol1 + " LIKE '%" + numeroDeclaracion + "%' " +
+            "AND " + dateCol1 + " = '" + fechaFormateada + "' " +
+            "FETCH FIRST 1 ROWS ONLY";
+        System.out.println("[BD] SQL: " + sql);
+
+        StepResult db = dbAgent.runWithResult("query", new Object[]{sql});
+        // si quieres conservar el último resultado en el contexto con un sufijo para cada iteración:
+        getScenarioContext().saveLastStepResult(db, varName + "_" + i);
+
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+        if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+            rowJson = String.valueOf(db.getFieldValue("row_json"));
+        }
+        if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+            throw new AssertionError("[BD] Consulta vacía para numDec=" + numeroDeclaracion + ", id=" + id);
+        }
+
+        // 2.6) Overrides puntuales (fecha)
+        Map<String,String> overrides = new HashMap<>();
+        overrides.put("OPF fechaDeclaracion", fechaFormateada);
+
+        // 2.7) Validación del bloque
+        String haystack = normalizeString(rowJson);
+        for (Map.Entry<String,String> e : kvBlock.entrySet()) {
+            String key = e.getKey();
+            String val = e.getValue();
+            if (val == null || val.isEmpty()) continue;
+
+            String candidate = overrides.getOrDefault(key, val);
+            String needle = normalizeString(candidate);
+
+            String altNeed = needle.replaceAll("[,.;:\\-/\\s]+", "");
+            String altHay  = haystack.replaceAll("[,.;:\\-/\\s]+", "");
+
+            if (haystack.contains(needle) || altHay.contains(altNeed)) {
+                System.out.println("[OK] ("+numeroDeclaracion+") '"+key+"' validado");
+            } else {
+                throw new AssertionError(
+                        "[BD] ("+numeroDeclaracion+") no se encontró clave='"+key+
+                        "' valor='"+val+"' comparado='" + candidate + "'");
+            }
+        }
+
+        System.out.println("[OK] Bloque validado -> numDec="+numeroDeclaracion+" id="+id);
+    } // fin for
+}

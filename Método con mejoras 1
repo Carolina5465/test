@@ -1,0 +1,232 @@
+package fast.common.glue;
+
+import fast.common.BaseCommonStepDefs;
+import fast.common.agents.Agent;
+import fast.common.agents.AgentsManager;
+import fast.common.steps.StepResult;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.text.Normalizer;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class OperationsFormsBqca extends BaseCommonStepDefs {
+
+    @When("^cargandobatosOPF \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"$")
+    public void cargandobatosOPF(String agentName, String nombreArchivo, String varName) throws Exception {
+
+        // ===== 0) Config: fallar al final o solo reportar =====
+        boolean failAtEnd = Boolean.parseBoolean(System.getProperty("opf.failAtEnd", "true"));
+        List<String> globalErrors = new ArrayList<>();
+
+        // ===== 1) Archivos de soporte =====
+        Path rutaIds  = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+        Path rutaNums = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadoXML.txt");
+
+        if (!Files.exists(rutaIds))  throw new Exception("[OPF] Falta identificador_generadoXML.txt: " + rutaIds.toAbsolutePath());
+        if (!Files.exists(rutaNums)) throw new Exception("[OPF] Falta numeros_formularios_generadoXML.txt: " + rutaNums.toAbsolutePath());
+
+        List<String> ids = Files.readAllLines(rutaIds, StandardCharsets.UTF_8).stream()
+                .filter(s -> s != null && !s.isBlank())
+                .map(s -> s.replaceAll("[^0-9]", ""))
+                .filter(s -> !s.isBlank())
+                .collect(Collectors.toList());
+        if (ids.isEmpty()) throw new Exception("[OPF] Archivo de IDs vacío.");
+
+        List<String> numerosDec = Files.readAllLines(rutaNums, StandardCharsets.UTF_8).stream()
+                .filter(s -> s != null && !s.isBlank())
+                .map(String::trim)
+                .collect(Collectors.toList());
+
+        // ===== 2) Leer JSON plano =====
+        Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+        if (!Files.exists(rutaJson)) throw new Exception("[OPF] No existe el JSON: " + rutaJson.toAbsolutePath());
+
+        String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+        Map<String,String> kv = JsonUtils.parseFlatJsonToMap(json);
+        System.out.println("[JSON] Campos: " + kv.size());
+
+        // ===== 3) Iterar por bloque =====
+        int bloques = Math.min(ids.size(), Math.max(
+                countBlocks(kv, "OPF numeroDeclaracion_"),
+                countBlocks(kv, "OPF fechaDeclaracion_")
+        ));
+        if (bloques == 0) throw new Exception("[OPF] No se detectaron bloques en el JSON (OPF numeroDeclaracion_n).");
+
+        for (int i = 0; i < bloques; i++) {
+            String id = ids.get(i);
+            String sufijo = "_" + (i + 1);
+
+            // ===== 3.1 Datos mínimos =====
+            String numeroDeclaracion = kv.get("OPF numeroDeclaracion" + sufijo);
+            String fechaDeclaracion  = kv.get("OPF fechaDeclaracion"  + sufijo);
+
+            if (numeroDeclaracion == null || numeroDeclaracion.isBlank()) {
+                String msg = "[OPF] Falta OPF numeroDeclaracion" + sufijo + " en JSON.";
+                System.out.println(msg);
+                globalErrors.add(msg);
+                continue;
+            }
+            if (fechaDeclaracion == null || fechaDeclaracion.isBlank()) {
+                String msg = "[OPF] Falta OPF fechaDeclaracion" + sufijo + " en JSON.";
+                System.out.println(msg);
+                globalErrors.add(msg);
+                continue;
+            }
+
+            String fechaFormateada = DateUtils.toOracleDayMonYY(fechaDeclaracion);
+            System.out.printf("[OPF] Bloque %s | ID=%s | numeroDeclaracion=%s | fechaBD=%s%n",
+                    sufijo, id, numeroDeclaracion, fechaFormateada);
+
+            // ===== 3.2 Tabla/columnas =====
+            String tabla, idCol1, dateCol1;
+            switch (id) {
+                case "1":
+                    tabla = "BAC_FSV1_FOR_IMPORT_BIENES"; idCol1 = "DST_NUM_DECL_INIC"; dateCol1= "DST_FECHA_DEC_INIC"; break;
+                case "2":
+                    tabla = "DIB_FSV1_FOR_DECLA_EXPOR_BIEN"; idCol1 = "DST_NUM_DECL_INIC"; dateCol1= "DST_FECHA_DEC_INIC"; break;
+                case "3":
+                    tabla = "BAC_FSV1_FOR_ENDEUDA_EXTER"; idCol1 = "DST_NUM_DECL_INIC"; dateCol1= "DST_FECHA_DEC_INIC"; break;
+                case "4":
+                    tabla = "BAC_FSV1_FOR_INV_INTERNAREST"; idCol1 = "DST_NUM_DECL_INIC"; dateCol1= "DST_FECHA_DEC_INIC"; break;
+                case "5":
+                    tabla = "BAC_FSV1_FOR_SERV_TRANS_OTROS"; idCol1 = "DST_NUM_DECL_INIC"; dateCol1= "DST_FECHA_DEC_INIC"; break;
+                default:
+                    String msg = "ID de formulario desconocido: " + id + " (bloque " + sufijo + ")";
+                    System.out.println(msg);
+                    globalErrors.add(msg);
+                    continue;
+            }
+
+            // ===== 3.3 SQL =====
+            String sql = "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+                    "FROM " + tabla + " " +
+                    "WHERE " + idCol1  + " LIKE '%" + numeroDeclaracion + "%' " +
+                    "AND "   + dateCol1+ " = '" + fechaFormateada + "' " +
+                    "FETCH FIRST 1 ROWS ONLY";
+            System.out.println("[BD] SQL -> " + sql);
+
+            // ===== 3.4 Query =====
+            Agent dbAgent = AgentsManager.getOrCreateAgent(agentName);
+            StepResult db;
+            try {
+                db = dbAgent.runWithResult("query", new Object[]{sql});
+            } catch (Exception ex) {
+                String msg = "[BD] Error ejecutando query (bloque " + sufijo + "): " + ex.getMessage();
+                System.out.println(msg);
+                globalErrors.add(msg);
+                continue;
+            }
+            if (db == null) {
+                String msg = "[BD] StepResult nulo (bloque " + sufijo + ")";
+                System.out.println(msg);
+                globalErrors.add(msg);
+                continue;
+            }
+            getScenarioContext().saveLastStepResult(db, varName);
+
+            String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+            if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+                rowJson = String.valueOf(db.getFieldValue("row_json"));
+            }
+            if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+                String msg = "[BD] Consulta vacía (bloque " + sufijo + ")";
+                System.out.println(msg);
+                globalErrors.add(msg);
+                continue;
+            }
+            System.out.println("[BD] ROW_JSON (bloque " + sufijo + "): " + rowJson);
+
+            // ===== 3.5 Bloque de JSON a validar =====
+            Map<String,String> kvBlock = new LinkedHashMap<>();
+            kv.forEach((k,v) -> {
+                if (k.startsWith("OPF ") && k.endsWith(sufijo) && v != null && !v.isBlank()) {
+                    kvBlock.put(k, v);
+                }
+            });
+
+            Map<String,String> overrides = new HashMap<>();
+            overrides.put("OPF fechaDeclaracion", DateUtils.toOracleDayMonYY(fechaDeclaracion));
+
+            // ===== 3.6 Validación =====
+            String haystack = normalizeString(rowJson);
+            List<String> oks   = new ArrayList<>();
+            List<String> fails = new ArrayList<>();
+
+            for (Map.Entry<String,String> e : kvBlock.entrySet()) {
+                String keyWithSuffix = e.getKey();
+                String baseKey       = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+                String value         = e.getValue();
+
+                String candidate = overrides.getOrDefault(baseKey, value);
+                if (candidate == null || candidate.isEmpty()) continue;
+
+                String needle  = normalizeString(candidate);
+                String altNeed = needle.replaceAll("[,.;:\\-/\\s]+", "");
+                String altHay  = haystack.replaceAll("[,.;:\\-/\\s]+", "");
+
+                if (haystack.contains(needle) || altHay.contains(altNeed)) {
+                    oks.add(baseKey + " = " + value);
+                } else {
+                    fails.add("[BD] (Bloque " + sufijo + ") NO encontrado -> " +
+                            baseKey + " = '" + value + "' (comparado='" + candidate + "')");
+                }
+            }
+
+            System.out.println(String.format("[RESUMEN] Bloque %s (ID=%s): OK=%d, FAIL=%d",
+                    sufijo, id, oks.size(), fails.size()));
+
+            if (!oks.isEmpty()) {
+                System.out.println("   [OK] Campos encontrados:");
+                oks.forEach(s -> System.out.println("      - " + s));
+            }
+            if (!fails.isEmpty()) {
+                System.out.println("   [FAIL] Campos faltantes:");
+                fails.forEach(s -> System.out.println("      - " + s));
+                globalErrors.addAll(fails);
+            }
+
+            System.out.println("[OK] Validación completada para bloque " + sufijo);
+        }
+
+        // ===== 4) Resumen final =====
+        if (!globalErrors.isEmpty()) {
+            System.out.println("\n===== RESUMEN FINAL: HAY FALTANTES =====");
+            globalErrors.forEach(s -> System.out.println(" - " + s));
+            if (failAtEnd) {
+                throw new AssertionError("Existen " + globalErrors.size() + " validaciones fallidas. Revisa el log.");
+            }
+        } else {
+            System.out.println("\n===== RESUMEN FINAL: TODO OK =====");
+        }
+    }
+
+    /* =================== Helpers =================== */
+
+    private static int countBlocks(Map<String,String> kv, String prefix) {
+        int n = 0;
+        while (kv.containsKey(prefix + (n + 1))) n++;
+        return n;
+    }
+
+    private static String normalizeString(String s) {
+        if (s == null) return "";
+        String u = s.toUpperCase(Locale.ROOT);
+        u = Normalizer.normalize(u, Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
+        u = u.replaceAll("[\\s]+", " ").trim();
+        return u;
+    }
+
+    static class DateUtils {
+        private static final DateTimeFormatter IN  = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        private static final DateTimeFormatter OUT = DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH);
+        static String toOracleDayMonYY(String yyyyMMdd) {
+            return LocalDate.parse(yyyyMMdd, IN).format(OUT).toUpperCase(Locale.ENGLISH);
+        }
+    }
+}

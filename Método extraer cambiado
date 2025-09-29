@@ -1,0 +1,162 @@
+@When("Extraigo datos del ultimo XML en la ruta \"([^\"]+)\" con prefijo \"([^\"]+)\"")
+public void extraigoDatosDelUltimoXML(String carpetaXml, String prefijo) throws Exception {
+    Path dir = Paths.get(carpetaXml);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("Ruta no valida: " + dir.toAbsolutePath());
+    }
+
+    // 2) Tomar el XML más reciente por lastModifiedTime
+    Path ultimoXml = Files.list(dir)
+            .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".xml"))
+            .max(Comparator.comparingLong(p -> {
+                try {
+                    return Files.getLastModifiedTime(p).toMillis();
+                } catch (Exception e) {
+                    return 0L;
+                }
+            }))
+            .orElseThrow(() -> new Exception("No se encontro archivo .xml en: " + dir.toAbsolutePath()));
+
+    System.out.println("[XML] Archivo seleccionado: " + ultimoXml.getFileName()
+            + " | fecha: " + Files.getLastModifiedTime(ultimoXml));
+
+    // 3) Parsear XML
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+    Document doc = dbf.newDocumentBuilder().parse(ultimoXml.toFile());
+    doc.getDocumentElement().normalize();
+
+    // ==== A) Obtener todas las hojas en ORDEN DE DOCUMENTO (fullPath -> valor) ====
+    List<Map.Entry<String,String>> leaves = new ArrayList<>();
+    collectLeavesInOrder(doc.getDocumentElement(), doc.getDocumentElement().getNodeName(), leaves);
+    System.out.println("[XML] Total de hojas encontradas: " + leaves.size());
+
+    // ==== B) Agrupar por bloques usando numeroDeclaracion, por 'sección' ====
+    // 'Sección' = primer nivel debajo de root, ej: root.importacionBienes
+    Map<String,Integer> sectionBlock = new HashMap<>(); // sección -> bloque actual (arranca en 0)
+    Map<String,String> shortMap = new LinkedHashMap<>();
+    String pf = (prefijo == null || prefijo.isBlank()) ? "" : prefijo.trim() + " ";
+
+    for (Map.Entry<String,String> leaf : leaves) {
+        String fullPath = leaf.getKey();     // ej: root.importacionBienes.valorTotalMonedaNegociacion
+        String value    = leaf.getValue();
+        if (value == null || value.trim().isEmpty()) continue;
+
+        String section  = getSectionKey(fullPath);  // ej: root.importacionBienes
+        String lastTag  = getLastTag(fullPath);     // ej: valorTotalMonedaNegociacion
+
+        // ¿Empieza un nuevo bloque?
+        if ("numeroDeclaracion".equalsIgnoreCase(lastTag)) {
+            int next = sectionBlock.getOrDefault(section, 0) + 1;
+            sectionBlock.put(section, next);
+        }
+
+        int currentBlock = sectionBlock.getOrDefault(section, 0);
+        // Si aún no hemos visto numeroDeclaracion en esta sección, opcionalmente
+        // puedes saltarte estos campos; aquí los asigno al bloque 1 por defecto:
+        if (currentBlock == 0) {
+            currentBlock = 1;
+            sectionBlock.put(section, 1);
+        }
+
+        String shortKey = pf + lastTag + "_" + currentBlock;
+        putUniqueIfDiff(shortMap, shortKey, value);
+    }
+
+    // Log útil
+    shortMap.forEach((k, v) -> System.out.println("[OPF] " + k + " -> " + v));
+
+    // ==== C) Guardar JSON resultante ====
+    Path outJson = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadoXML.json");
+    String json = new Gson().toJson(shortMap);
+    Files.writeString(outJson, json, StandardCharsets.UTF_8);
+    System.out.println("[JSON] Guardado en: " + outJson.toAbsolutePath());
+}
+
+/* =========================
+   Helpers
+   ========================= */
+
+/** Recolecta HOJAS en orden de documento (profundidad primero) */
+private static void collectLeavesInOrder(Node node, String path, List<Map.Entry<String,String>> out) {
+    // atributos como hojas
+    if (node.hasAttributes()) {
+        NamedNodeMap attrs = node.getAttributes();
+        for (int i = 0; i < attrs.getLength(); i++) {
+            Node a = attrs.item(i);
+            String k = path + "@" + a.getNodeName();
+            String v = a.getNodeValue();
+            if (v != null && !v.trim().isEmpty()) {
+                out.add(new AbstractMap.SimpleEntry<>(k, v.trim()));
+            }
+        }
+    }
+
+    NodeList children = node.getChildNodes();
+    List<Element> elems = new ArrayList<>();
+    for (int i = 0; i < children.getLength(); i++) {
+        Node n = children.item(i);
+        if (n.getNodeType() == Node.ELEMENT_NODE) {
+            elems.add((Element) n);
+        }
+    }
+
+    if (elems.isEmpty()) {
+        String text = node.getTextContent();
+        if (text != null) {
+            String t = text.trim();
+            if (!t.isEmpty()) {
+                out.add(new AbstractMap.SimpleEntry<>(path, t));
+            }
+        }
+        return;
+    }
+
+    for (Element e : elems) {
+        String tag = e.getNodeName().replaceAll("\\s+", "");
+        collectLeavesInOrder(e, path + "." + tag, out);
+    }
+}
+
+/** Devuelve el último tag del path */
+private static String getLastTag(String fullPath) {
+    int idx = fullPath.lastIndexOf('.');
+    String last = idx >= 0 ? fullPath.substring(idx + 1) : fullPath;
+    int attrIdx = last.indexOf('@');
+    if (attrIdx >= 0 && attrIdx < last.length() - 1) {
+        last = last.substring(attrIdx + 1);
+    }
+    return last.replaceAll("\\s+", "");
+}
+
+/** Devuelve la 'sección': root.<primerHijo>, para agrupar bloques por área */
+private static String getSectionKey(String fullPath) {
+    // ej: root.importacionBienes.xxx.yyy -> root.importacionBienes
+    String[] parts = fullPath.split("\\.");
+    if (parts.length >= 2) {
+        return parts[0] + "." + parts[1];
+    }
+    return parts[0];
+}
+
+/** Igual a tu helper: si existe y cambia el valor, crea sufijos [2], [3]... */
+private static void putUniqueIfDiff(Map<String, String> map, String key, String value) {
+    if (value == null) value = "";
+    value = value.trim();
+    if (map.containsKey(key)) {
+        if (Objects.equals(map.get(key), value)) {
+            return;
+        }
+        int i = 2;
+        while (map.containsKey(key + "[" + i + "]")) {
+            if (Objects.equals(map.get(key + "[" + i + "]"), value)) {
+                return;
+            }
+            i++;
+        }
+        map.put(key + "[" + i + "]", value);
+    } else {
+        map.put(key, value);
+    }
+}

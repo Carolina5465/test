@@ -1,0 +1,30 @@
+@When("^Extraigo el nombre del ultimo XML en ruta \"([^\"]+)\" y lo guardo en \"([^\"]+)\"$")
+public void extraigoNombreDelUltimoXML(String carpetaXml, String varName) throws Exception {
+    Path dir = Paths.get(carpetaXml);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("[XML] Ruta no válida: " + dir.toAbsolutePath());
+    }
+
+    Path ultimoXml = Files.list(dir)
+            .filter(Files::isRegularFile)
+            .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".xml"))
+            .max(Comparator.comparingLong(p -> {
+                try { return Files.getLastModifiedTime(p).toMillis(); }
+                catch (Exception e) { return 0L; }
+            }))
+            .orElseThrow(() -> new Exception("[XML] No se encontró .xml en: " + dir.toAbsolutePath()));
+
+    String fileName      = ultimoXml.getFileName().toString();
+    String fileNameNoExt = fileName.replaceFirst("(?i)\\.xml$", "");
+
+    System.out.println("[XML] Más reciente: " + fileName + " | fecha=" + Files.getLastModifiedTime(ultimoXml));
+
+    // Guardar en StepResult
+    StepResult sr = new StepResult();
+    sr.setFieldValue("fileName", fileName);
+    sr.setFieldValue("fileNameNoExt", fileNameNoExt);
+    getScenarioContext().saveLastStepResult(sr, varName);
+
+    System.out.println("[OK] Guardado @" + varName + ".fileName = " + fileName);
+    System.out.println("[OK] Guardado @" + varName + ".fileNameNoExt = " + fileNameNoExt);
+}

@@ -1,0 +1,45 @@
+// Imports necesarios:
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.attribute.FileTime;
+import java.util.Comparator;
+
+import io.cucumber.java.en.When;
+
+@When("^Extraigo el nombre del ultimo XML en ruta \"([^\"]+)\" y lo guardo en \"([^\"]+)\"$")
+public void extraigoNombreDelUltimoXML(String carpetaXml, String varName) throws Exception {
+    // 1) Validar ruta
+    Path dir = Paths.get(carpetaXml);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("[XML] Ruta no válida: " + dir.toAbsolutePath());
+    }
+
+    // 2) Tomar el XML más reciente por lastModifiedTime
+    Path ultimoXml = Files.list(dir)
+            .filter(p -> Files.isRegularFile(p))
+            .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".xml"))
+            .max(Comparator.comparingLong(p -> {
+                try {
+                    FileTime ft = Files.getLastModifiedTime(p);
+                    return ft == null ? 0L : ft.toMillis();
+                } catch (Exception e) {
+                    return 0L;
+                }
+            }))
+            .orElseThrow(() -> new Exception("[XML] No se encontró archivo .xml en: " + dir.toAbsolutePath()));
+
+    String fileName = ultimoXml.getFileName().toString();               // ej: ABC_2025_09_17.xml
+    String fileNameNoExt = fileName.replaceFirst("(?i)\\.xml$", "");    // ej: ABC_2025_09_17
+
+    System.out.println(String.format("[XML] Más reciente: %s | fecha=%s",
+            fileName, Files.getLastModifiedTime(ultimoXml)));
+
+    // 3) Persistir en variables de escenario
+    //   - principal: nombre con extensión
+    //   - auxiliar:  nombre sin extensión (útil para consultas)
+    getScenarioContext().evalScope().saveVariable(varName, fileName);
+    getScenarioContext().evalScope().saveVariable(varName + "_sinExt", fileNameNoExt);
+
+    System.out.println("[OK] Guardado @" + varName + " = " + fileName);
+    System.out.println("[OK] Guardado @" + varName + "_sinExt = " + fileNameNoExt);
+}

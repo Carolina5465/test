@@ -1,0 +1,30 @@
+@When("^Extraigo el nombre del ultimo XML en ruta \"([^\"]+)\" y lo guardo en la variable \"([^\"]+)\"$")
+public void extraigoNombreDelUltimoXML(String carpetaXml, String varName) throws Exception {
+    // 1) Validar ruta
+    Path dir = Paths.get(carpetaXml);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("[XML] Ruta no valida: " + dir.toAbsolutePath());
+    }
+
+    // 2) XML más reciente por fecha de modificación
+    Path ultimoXml = Files.list(dir)
+            .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".xml"))
+            .max(Comparator.comparingLong(p -> {
+                try { return Files.getLastModifiedTime(p).toMillis(); }
+                catch (Exception e) { return 0L; }
+            }))
+            .orElseThrow(() -> new Exception("[XML] No se encontro archivo .xml en: " + dir.toAbsolutePath()));
+
+    String fileName = ultimoXml.getFileName().toString(); // nombre CON extensión
+    System.out.println(String.format("[XML] Más reciente: %s | fecha=%s",
+            fileName, Files.getLastModifiedTime(ultimoXml)));
+
+    // 3) Guardar la variable en ambos contextos (como en tus otros pasos)
+    // 3.a) ScenarioContext (para usar getScenarioContext().getVariable(varName) o similares)
+    getScenarioContext().saveVariable(varName, fileName);
+
+    // 3.b) GlobalContext (para usar GlobalContext.get(varName))
+    GlobalContext.set(varName, fileName);
+
+    System.out.println("[OK] Guardado @" + varName + " = " + fileName);
+}

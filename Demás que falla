@@ -1,0 +1,45 @@
+@When("^(\\w+) consulta datos de archivo por nombre unico y lo guardo en (\\w+)$")
+public void consultaDatosBDXML(String agentName, String varName) throws Exception {
+    // 1) Recupera el nombre que guardaste antes (ajusta la clave si usas otra)
+    String nombreArchivo = String.valueOf(getScenarioContext().get("@nombreXML")).trim();
+    if (nombreArchivo.isEmpty()) {
+        throw new Exception("nombreArchivo vacío: guarda primero @nombreXML");
+    }
+
+    // 2) Ejecuta la consulta
+    String sql =
+        "SELECT FP_NOMBREARCHIVO AS FP_NOMBREARCHIVO " +
+        "FROM BAC_DETFORMULARIOSPROCESADOS_XML " +
+        "WHERE FP_NOMBREARCHIVO = '" + nombreArchivo + "' " +
+        "FETCH FIRST 1 ROWS ONLY";
+    System.out.println("[INFO] Ejecutando consulta: " + sql);
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+    StepResult db = dbAgent.runWithResult("query", new Object[]{sql});
+    if (db == null) throw new Exception("StepResult nulo de la consulta");
+
+    Object raw = db.getFieldValue("FP_NOMBREARCHIVO");
+    if (raw == null) raw = db.getFieldValue("fp_nombrearchivo");
+    String valor = raw == null ? "" : raw.toString().trim();
+
+    // 3) Construye tu propio StepResult y añade el campo esperado
+    // ===== Variante A: CommonStepResult con addField (si existe en tu versión)
+    CommonStepResult sr = new CommonStepResult(getScenarioContext());
+    sr.setStatus(StepResult.Status.PASSED);
+    sr.addField("FP_NOMBREARCHIVO", valor);
+
+    // ===== Variante B (si A no compila): CommonStepResult con getFields().put(...)
+    // CommonStepResult sr = new CommonStepResult(getScenarioContext());
+    // sr.setStatus(StepResult.Status.PASSED);
+    // sr.getFields().put("FP_NOMBREARCHIVO", valor);
+
+    // ===== Variante C (si usas DataStepResult): 
+    // DataStepResult sr = new DataStepResult(getScenarioContext());
+    // sr.setStatus(StepResult.Status.PASSED);
+    // sr.put("FP_NOMBREARCHIVO", valor);
+
+    // 4) Persiste como “último StepResult” con el nombre que leerás en el feature
+    getScenarioContext().saveLastStepResult(sr, varName);
+
+    System.out.println("[OK] Guardado @" + varName + " FP_NOMBREARCHIVO = " + valor);
+}

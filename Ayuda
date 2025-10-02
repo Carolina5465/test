@@ -1,0 +1,37 @@
+@When("^(\\w+) consulta datos de archivo por nombre unico y lo guardo en (\\w+)$")
+public void consultaDatosBDXML(String agentName, String varName) throws Exception {
+
+    // 1) Recuperar el nombre del XML que guardaste antes (o donde lo tengas)
+    String nombreArchivo = String.valueOf(getScenarioContext().get("@nombreXML")).trim();
+    if (nombreArchivo.isEmpty()) {
+        throw new Exception("nombreArchivo vacío: asegúrate de haberlo guardado antes como @nombreXML");
+    }
+
+    // 2) Query (ajústala a tu tabla/esquema)
+    String sql =
+        "SELECT FP_NOMBREARCHIVO AS FP_NOMBREARCHIVO " +
+        "FROM BAC_DETFORMULARIOSPROCESADOS_XML " +
+        "WHERE FP_NOMBREARCHIVO = '" + nombreArchivo + "' " +
+        "FETCH FIRST 1 ROWS ONLY";
+
+    System.out.println("[INFO] Ejecutando consulta: " + sql);
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+    StepResult db = dbAgent.runWithResult("query", new Object[]{sql});
+    if (db == null) throw new Exception("StepResult nulo de la consulta");
+
+    // 3) Extraer el valor de la fila devuelta (probando alias/casing)
+    Object raw = db.getFieldValue("FP_NOMBREARCHIVO");
+    if (raw == null) raw = db.getFieldValue("fp_nombrearchivo");
+    String valor = raw == null ? "" : raw.toString().trim();
+
+    // 4) Construir un StepResult *nuevo* con el campo que tu step 'get' va a buscar
+    StepResult sr = new StepResult();
+    sr.setFieldValue("FP_NOMBREARCHIVO", valor);
+
+    // 5) Guardarlo como "último StepResult" bajo el nombre que usarás en el feature (p. ej. @data)
+    getScenarioContext().saveLastStepResult(sr, varName);
+
+    // Log
+    System.out.println("[OK] Guardado @" + varName + " FP_NOMBREARCHIVO = " + valor);
+}

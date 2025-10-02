@@ -1,0 +1,40 @@
+@When("^OraclesIT consulta datos de archivo por nombre unico y lo guardo en @([\\w]+)$")
+public void consultarDatosBDXML(String agentName, String varName) throws Exception {
+
+    // 1) Nombre de archivo ya guardado antes (p.ej. @nombreXML)
+    //    Si le pasas @nombreXML en el feature, processString lo resuelve
+    String nombreArchivo = getScenarioContext().processString("@nombreXML");
+
+    // 2) Query con alias FIJO "VAL"
+    String sql =
+        "SELECT FP_NOMBREARCHIVO AS VAL " +
+        "FROM BAC_DETFORMULARIOSPROCESADOS_XML " +
+        "WHERE FP_NOMBREARCHIVO = '" + nombreArchivo + "' " +
+        "FETCH FIRST 1 ROWS ONLY";
+
+    System.out.println("[INFO] Ejecutando: " + sql);
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+    StepResult result = dbAgent.runWithResult("query", new Object[]{sql});
+
+    // (opcional) guarda el StepResult por compatibilidad con otros steps
+    getScenarioContext().saveLastStepResult(result, "data");
+
+    // 3) Leer el valor por alias con tolerancia a casing
+    Object raw = result.getFieldValue("VAL");
+    if (raw == null) raw = result.getFieldValue("val");
+    String valor = raw == null ? "" : raw.toString().trim();
+
+    // 4) Guardar la variable que el step "get @variable value" va a buscar
+    GlobalContext.set(varName, valor);
+    getScenarioContext().saveVariable(varName, valor);
+
+    // 5) (si además usas el step tipo "get @data FP_NOMBREARCHIVO value")
+    //    crea también la variable compuesta para que ese step la encuentre:
+    String compuesto = "data_FP_NOMBREARCHIVO";
+    GlobalContext.set(compuesto, valor);
+    getScenarioContext().saveVariable(compuesto, valor);
+
+    System.out.println("[OK] Guardado @" + varName + " = " + valor);
+    System.out.println("[OK] Guardado @" + compuesto + " = " + valor);
+}

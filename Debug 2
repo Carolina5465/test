@@ -1,0 +1,26 @@
+@When("^OracleSIT debugXML (\\w+) con (.*) y lo guardo en @(\\w+)$")
+public void debugXML(String agentName, String nombreArchivo, String varName) throws Exception {
+    String sql =
+        "SELECT JSON_OBJECT("
+      + " 'SESSION_USER'   VALUE (SELECT USER FROM dual),"
+      + " 'CURRENT_SCHEMA' VALUE (SELECT sys_context('USERENV','CURRENT_SCHEMA') FROM dual),"
+      + " 'DB_NAME'        VALUE (SELECT sys_context('USERENV','DB_NAME') FROM dual),"
+      + " 'SERVICE_NAME'   VALUE (SELECT sys_context('USERENV','SERVICE_NAME') FROM dual),"
+      + " 'CNT_ALL'        VALUE (SELECT COUNT(*) FROM BAC_DETFORMULARIOSPROCESADOS_XML),"
+      + " 'CNT_MATCH'      VALUE ("
+      + "   SELECT COUNT(*) FROM BAC_DETFORMULARIOSPROCESADOS_XML "
+      + "   WHERE REPLACE(REPLACE(TRIM(FP_NOMBREARCHIVO),CHR(13),''),CHR(10),'') = "
+      + "         REPLACE(REPLACE(TRIM('" + nombreArchivo + "'),CHR(13),''),CHR(10),'')"
+      + " )"
+      + ") AS ROW_JSON "
+      + "FROM dual";
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+    StepResult res = dbAgent.runWithResult("query", new Object[]{sql});
+
+    // Guarda el resultado en el último StepResult bajo tu variable @varName
+    getScenarioContext().saveLastStepResult(res, varName);
+
+    // (Opcional) log para ver nombres de campos disponibles
+    System.out.println("[DEBUG] Campos: " + res.getFieldsValues().keySet());
+}

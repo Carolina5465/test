@@ -1,0 +1,38 @@
+@When("^(\\w+) debug xml nombrearchivo (.+) into (\\w+)$")
+public void debugXml(String agentName, String nombreArchivo, String varName) throws Exception {
+    String val = nombreArchivo.trim();
+
+    String sql =
+        "WITH ctx AS (\n" +
+        "  SELECT SYS_CONTEXT('USERENV','SESSION_USER')   AS SESSION_USER,\n" +
+        "         SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AS CURRENT_SCHEMA,\n" +
+        "         SYS_CONTEXT('USERENV','DB_NAME')        AS DB_NAME,\n" +
+        "         SYS_CONTEXT('USERENV','SERVICE_NAME')   AS SERVICE_NAME\n" +
+        "  FROM dual\n" +
+        "), t AS (\n" +
+        "  SELECT COUNT(*) AS CNT_ALL FROM BAC_DETFORMULARIOSPROCESADOS_XML\n" +
+        "), m AS (\n" +
+        "  SELECT COUNT(*) AS CNT_MATCH\n" +
+        "  FROM BAC_DETFORMULARIOSPROCESADOS_XML\n" +
+        "  WHERE REPLACE(REPLACE(TRIM(FP_NOMBREARCHIVO),CHR(13),''),CHR(10),'') =\n" +
+        "        REPLACE(REPLACE(TRIM('" + val + "'),CHR(13),''),CHR(10),'')\n" +
+        ")\n" +
+        "SELECT JSON_OBJECT(\n" +
+        "  'SESSION_USER' VALUE (SELECT SESSION_USER FROM ctx),\n" +
+        "  'CURRENT_SCHEMA' VALUE (SELECT CURRENT_SCHEMA FROM ctx),\n" +
+        "  'DB_NAME' VALUE (SELECT DB_NAME FROM ctx),\n" +
+        "  'SERVICE_NAME' VALUE (SELECT SERVICE_NAME FROM ctx),\n" +
+        "  'CNT_ALL' VALUE (SELECT CNT_ALL FROM t),\n" +
+        "  'CNT_MATCH' VALUE (SELECT CNT_MATCH FROM m)\n" +
+        ") AS ROW_JSON\n" +
+        "FROM dual";
+
+    System.out.println("[INFO] Ejecutando debug SQL:\n" + sql);
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+    StepResult res = dbAgent.runWithResult("query", new Object[]{sql});
+    if (res == null) throw new Exception("StepResult nulo");
+
+    getScenarioContext().saveLastStepResult(res, varName);
+    System.out.println("[OK] Debug guardado en @" + varName);
+}

@@ -1,0 +1,30 @@
+@When("^(\\w+) consulta datos de archivo por nombre unico y lo guardo en (\\w+)$")
+public void consultaDatosBDXML(String agentName, String varName) throws Exception {
+    // 1) Recuperar el nombre ya capturado (asegúrate de cómo lo guardaste)
+    String nombreArchivo = String.valueOf(getScenarioContext().get("@nombreXML")).trim();
+    if (nombreArchivo.isEmpty()) {
+        throw new Exception("No se encontró @nombreXML en el ScenarioContext. Asegúrate de ejecutar primero el step que lo guarda.");
+    }
+
+    // 2) Consulta con alias EXACTO (respeta mayúsculas/minúsculas según tus steps)
+    String sql =
+        "SELECT FP_NOMBREARCHIVO AS FP_NOMBREARCHIVO " +
+        "FROM BAC_DETFORMULARIOSPROCESADOS_XML " +
+        "WHERE FP_NOMBREARCHIVO = '" + nombreArchivo + "' " +
+        "FETCH FIRST 1 ROWS ONLY";
+
+    System.out.println("[INFO] Ejecutando consulta: " + sql);
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+    StepResult result = dbAgent.runWithResult("query", new Object[]{sql});
+    if (result == null) {
+        throw new Exception("StepResult nulo devuelto por el agente al ejecutar la consulta.");
+    }
+
+    // DEBUG: imprime los campos que realmente vinieron del agente
+    System.out.println("[DEBUG] Campos devueltos: " + result.getFields().keySet());
+
+    // 3) Guardar el StepResult tal cual, bajo el nombre que usarás luego en el feature
+    getScenarioContext().saveLastStepResult(result, varName);
+    System.out.println("[OK] Guardado @" + varName + " con resultado de la consulta.");
+}

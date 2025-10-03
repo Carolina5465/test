@@ -1,0 +1,30 @@
+@When("^(\\w+) consulta datos de archivo por nombre unico y lo guardo en @(\\w+)$")
+public void debugXML(String agentName, String varName) throws Exception {
+    // 0) Leer variable con el nombre del archivo (definida antes en el .feature)
+    Object o = GlobalContext.get("nombreXML"); // o el alias correcto en tu Background
+    if (o == null) {
+        throw new Exception("Variable @nombreXML no está definida en el GlobalContext. " +
+                            "Asegúrate de setearla en un paso anterior.");
+    }
+    String nombreArchivo = o.toString().trim();
+
+    // 1) Consulta
+    String sql =
+        "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+        "FROM BAC_DETFORMULARIOSPROCESADOS_XML " +
+        "WHERE REPLACE(REPLACE(TRIM(FP_NOMBREARCHIVO), CHR(13), ''), CHR(10), '') = '" +
+        nombreArchivo + "'";
+
+    System.out.println("[INFO] Ejecutando consulta: " + sql);
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+    if (dbAgent == null) throw new Exception("[BD] Agente nulo para: " + agentName);
+
+    StepResult res = dbAgent.runWithResult("query", new Object[]{ sql });
+
+    // Guardar el último StepResult bajo tu var @varName (como exige el framework)
+    getScenarioContext().saveLastStepResult(res, varName);
+
+    // (Opcional) listar campos disponibles para depurar
+    System.out.println("[DEBUG] Campos: " + res.getFieldsValues().keySet());
+}

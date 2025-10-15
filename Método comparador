@@ -1,0 +1,27 @@
+@When("^get @variable (\\w+) variable y lo almacena en la variable (.+)$")
+public String getVariableValue(String varName, String value) {
+
+    // 1️⃣ Obtener los valores *ya resueltos* a texto simple
+    String nombreArchivo = "";
+    Object raw = GlobalContext.get("nombreXML");
+    if (raw != null) nombreArchivo = raw.toString();
+
+    String valorBD = getScenarioContext().processString(varName);
+
+    // 2️⃣ Limpiar los valores de caracteres invisibles o basura
+    nombreArchivo = nombreArchivo.replaceAll("[\\r\\n\\t\"']", "").trim();
+    valorBD       = valorBD.replaceAll("[\\r\\n\\t\"']", "").trim();
+
+    // 3️⃣ Mostrar ambos valores para ver exactamente qué texto se compara
+    System.out.println("🟦 Nombre del XML desde la ruta: [" + nombreArchivo + "]");
+    System.out.println("🟩 Nombre del XML desde la BD:   [" + valorBD + "]");
+
+    // 4️⃣ Comparar texto plano, ignorando mayúsculas/minúsculas
+    if (nombreArchivo.equalsIgnoreCase(valorBD)) {
+        System.out.println("✅ Coincidencia exacta entre la ruta y la BD.");
+    } else {
+        throw new AssertionError("❌ El texto no coincide.\nRuta: " + nombreArchivo + "\nBD:   " + valorBD);
+    }
+
+    return valorBD;
+}

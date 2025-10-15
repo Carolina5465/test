@@ -1,0 +1,116 @@
+@When("^.*consulto y valido OPF solo numero y fecha.*$")
+public void cargandodatosOPF_NumeroYFecha(String agentName, String nombreArchivo, String varName) throws Exception {
+
+    // ======= 0) Config =======
+    boolean failAtEnd = Boolean.parseBoolean(System.getProperty("opf.failAtEnd", "true"));
+    List<String> globalErrors = new ArrayList<>();
+
+    // ======= 1) Insumos (mismo flujo que el método anterior) =======
+    Path rutaIds = Paths.get(System.getProperty("user.dir"), "identificador_generadorXML.txt");
+    if (!Files.exists(rutaIds))
+        throw new Exception("[OPF] No existe el archivo de identificador: " + rutaIds.toAbsolutePath());
+
+    Path rutaNums = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadorXML.txt");
+    if (!Files.exists(rutaNums))
+        throw new Exception("[OPF] No existe el archivo de numeros: " + rutaNums.toAbsolutePath());
+
+    List<String> ids = Files.readAllLines(rutaIds, StandardCharsets.UTF_8).stream()
+            .filter(s -> s != null && !s.isBlank())
+            .map(s -> s.replaceAll("[^0-9]", ""))
+            .collect(Collectors.toList());
+    if (ids.isEmpty()) throw new Exception("[OPF] Archivo de IDs vacío");
+
+    List<String> numerosDeForm = Files.readAllLines(rutaNums, StandardCharsets.UTF_8).stream()
+            .filter(s -> s != null && !s.isBlank())
+            .collect(Collectors.toList());
+
+    // JSON con los campos OPF.*
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+    if (!Files.exists(rutaJson))
+        throw new Exception("[OPF] No existe el JSON: " + rutaJson.toAbsolutePath());
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8);
+    Map<String, String> kv = JsonUtils.parseJsonToMap(json);
+
+    // nombre del archivo (ya lo vienes guardando antes)
+    String fileName = String.valueOf(GlobalContext.get("nombreXML"));
+
+    int bloques = Math.min(ids.size(), numerosDeForm.size());
+    if (bloques == 0) throw new Exception("[OPF] No se detectaron bloques en el JSON (0)");
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+
+    for (int i = 0; i < bloques; i++) {
+        String sufijo = "_" + (i + 1);
+
+        // ======= Datos esperados del JSON =======
+        String numeroDeclaracion = kv.get("OPF.numeroDeclaracion." + i);
+        String fechaDeclaracion  = kv.get("OPF.fechaDeclaracion." + i);
+
+        if (numeroDeclaracion == null || numeroDeclaracion.isBlank()) {
+            globalErrors.add("[OPF] Falta OPF.numeroDeclaracion" + sufijo + " en JSON.");
+            continue;
+        }
+        if (fechaDeclaracion == null || fechaDeclaracion.isBlank()) {
+            globalErrors.add("[OPF] Falta OPF.fechaDeclaracion" + sufijo + " en JSON.");
+            continue;
+        }
+
+        // normalizamos fecha al formato que maneja tu utilidad (ej: 16-SEP-25)
+        String fechaOracle = DateUtils.toOracleDayMonthY(fechaDeclaracion);
+
+        // ======= SQL: sólo validar que *existe* una fila donde coincidan ambos campos =======
+        // JOIN entre las tablas XML y la maestra de formularios, filtrando por el archivo.
+        String sql =
+            "SELECT COUNT(*) AS CNT " +
+            "FROM BAC_DETFORMULARIOSPROCESADOS_XML a " +
+            "JOIN BAC_FORMULARIOSPROCESADOS_XML b " +
+            "  ON a.FP_NOMBREARCHIVO = b.FP_NOMBREARCHIVO " +
+            "WHERE a.FP_NOMBREARCHIVO = '" + fileName + "' " +
+            "  AND b.FP_NUMERODECLARACION = '" + numeroDeclaracion + "' " +
+            "  AND TO_CHAR(b.FP_FECHA,'DD-MON-RR','NLS_DATE_LANGUAGE=AMERICAN') = '" + fechaOracle + "'";
+
+        System.out.println("[OPF] (bloque " + sufijo + ") SQL -> " + sql);
+
+        StepResult res;
+        try {
+            res = dbAgent.runStepWithResult("query", new Object[]{sql});
+        } catch (Exception ex) {
+            String msg = "[BD] Error ejecutando query (bloque " + sufijo + "): " + ex.getMessage();
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+        if (res == null) {
+            globalErrors.add("[BD] StepResult nulo (bloque " + sufijo + ")");
+            continue;
+        }
+
+        getScenarioContext().saveLastStepResult(res, varName);
+        String cntStr = String.valueOf(res.getFieldValue("CNT")).trim();
+
+        // ======= Validación =======
+        boolean match = !"null".equalsIgnoreCase(cntStr) && !"".equals(cntStr) && !"0".equals(cntStr);
+        if (match) {
+            System.out.println(String.format(
+                "[OK] Bloque %s → Se encontró coincidencia (NUM=%s, FECHA=%s) para archivo %s",
+                sufijo, numeroDeclaracion, fechaOracle, fileName));
+        } else {
+            String msg = String.format(
+                "[FAIL] Bloque %s → No hay coincidencia en BD para (NUM=%s, FECHA=%s) archivo=%s",
+                sufijo, numeroDeclaracion, fechaOracle, fileName);
+            System.out.println(msg);
+            globalErrors.add(msg);
+        }
+    }
+
+    // ======= Resumen final =======
+    System.out.println("======= RESUMEN FINAL (NUM+FECHA) =======");
+    if (globalErrors.isEmpty()) {
+        System.out.println("[OK] Todo OK");
+    } else {
+        globalErrors.forEach(s -> System.out.println(" - " + s));
+        if (failAtEnd)
+            throw new AssertionError("Existen " + globalErrors.size()
+                + " validaciones fallidas (NUM+FECHA). Revisa el log.");
+    }
+}

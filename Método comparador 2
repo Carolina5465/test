@@ -1,0 +1,46 @@
+@When("^OracleSIT compara el nombre del xml$")
+public void comparacionNombreXMLBD1(String agentName) throws Exception {
+    String nombreArchivo = String.valueOf(GlobalContext.get("nombreXML"));
+    String nombreBD      = String.valueOf(GlobalContext.get("nombreXML_BD"));
+
+    // Normalizar
+    nombreArchivo = normalize(nombreArchivo);
+    nombreBD      = normalize(nombreBD);
+
+    // Logs útiles
+    System.out.println("El nombre desde la ruta contiene: [" + nombreArchivo + "]");
+    System.out.println("El nombre desde la base de datos contiene: [" + nombreBD + "]");
+    System.out.println("len(ruta)=" + nombreArchivo.length() + " len(BD)=" + nombreBD.length());
+
+    // Comparación de contenido
+    if (nombreArchivo.equals(nombreBD)) {
+        System.out.println("✅ Coinciden exactamente.");
+        return;
+    }
+
+    // Si falla, muestra diferencias de caracteres
+    debugDiff(nombreArchivo, nombreBD);
+    throw new AssertionError("El nombre del xml no se encontró en la base de datos: " + nombreArchivo);
+}
+
+private static String normalize(String s) {
+    if (s == null) return "";
+    // quita BOM/invisibles, saltos/tabs y comillas; trim final
+    return s.replace("\uFEFF","")
+            .replaceAll("[\\r\\n\\t\"']", "")
+            .trim();
+}
+
+private static void debugDiff(String a, String b) {
+    System.out.println("🔎 Diferencias char a char:");
+    int n = Math.max(a.length(), b.length());
+    for (int i = 0; i < n; i++) {
+        char ca = i < a.length() ? a.charAt(i) : '∅';
+        char cb = i < b.length() ? b.charAt(i) : '∅';
+        if (ca != cb) {
+            System.out.printf("pos %d: '%s'(0x%02X) vs '%s'(0x%02X)%n",
+                    i, ca, (int)ca, cb, (int)cb);
+            break;
+        }
+    }
+}

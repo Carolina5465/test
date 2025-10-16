@@ -1,0 +1,161 @@
+package fast.common.glue;
+
+import io.cucumber.java.en.When;
+import org.w3c.dom.*;
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.time.Instant;
+import java.util.*;
+import java.util.stream.Stream;
+import com.google.gson.Gson;
+
+public class OperationsFormsBaca extends BaseCommonStepDefs {
+
+    @When("^Extraigo datos del último XML en la ruta \"([^\"]+)\" con prefijo \"([^\"]+)\"$")
+    public void extraigoDatosDelUltimoXML(String carpetaXml, String prefijo) throws Exception {
+
+        // 1) Validar carpeta
+        Path dir = Paths.get(carpetaXml);
+        if (!Files.isDirectory(dir)) {
+            throw new Exception("Carpeta no válida: " + dir.toAbsolutePath());
+        }
+
+        // 2) Tomar el XML más reciente por lastModifiedTime
+        Path ultimoXml;
+        try (Stream<Path> list = Files.list(dir)) {
+            ultimoXml = list
+                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".xml"))
+                    .max(Comparator.comparing(p -> {
+                        try {
+                            return Files.getLastModifiedTime(p).toInstant();
+                        } catch (Exception e) {
+                            return Instant.EPOCH;
+                        }
+                    }))
+                    .orElseThrow(() -> new Exception("No se encontraron .xml en: " + dir.toAbsolutePath()));
+        }
+
+        System.out.println("[XML reciente]: " + ultimoXml.getFileName()
+                + " | fecha: " + Files.getLastModifiedTime(ultimoXml));
+
+        // 3) Parsear XML
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(false);
+        dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        Document doc = dbf.newDocumentBuilder().parse(ultimoXml.toFile());
+        doc.getDocumentElement().normalize();
+
+        // === A) Obtener todas las hojas en ORDEN DE DOCUMENTO (fullPath -> valor)
+        List<Map.Entry<String, String>> leaves = new ArrayList<>();
+        collectLeavesInOrder(doc.getDocumentElement(), doc.getDocumentElement().getNodeName(), leaves);
+
+        System.out.println("[XML] Total de hojas encontradas: " + leaves.size());
+
+        // === B) Construir claves limpias con índice _1, _2, _3 por cada último tag
+        Map<String, Integer> countersPorTag = new HashMap<>();   // baseKey -> secuencia
+        Map<String, String> shortMap = new LinkedHashMap<>();    // mantiene orden de inserción
+
+        for (Map.Entry<String, String> leaf : leaves) {
+            String fullPath = leaf.getKey();
+            String value = leaf.getValue();
+            if (value == null || value.isBlank()) continue;
+
+            String lastTag = getLastTag(fullPath); // p.ej. numeroDeclaracion, fechaDeclaracion, ...
+
+            // BaseKey = OPF_numeroDeclaracion
+            String baseKey = prefijo + "_" + lastTag;
+
+            // Siguiente índice para ese tag: 1, 2, 3, ...
+            int next = countersPorTag.getOrDefault(baseKey, 0) + 1;
+            countersPorTag.put(baseKey, next);
+
+            // Clave final: OPF_numeroDeclaracion_1 (sin [2])
+            String shortKey = baseKey + "_" + next;
+
+            // Guarda (evita duplicado exacto opcionalmente con putUniqueIfDiff)
+            // shortMap.put(shortKey, value.trim());
+            putUniqueIfDiff(shortMap, shortKey, value.trim());
+
+            System.out.println("[OPF] " + shortKey + " => " + value);
+        }
+
+        // === C) Guardar JSON resultado
+        Path outJson = Paths.get(System.getProperty("user.dir"), "ultimo_xml_OPF.json");
+        String json = new Gson().toJson(shortMap);
+        Files.writeString(outJson, json, StandardCharsets.UTF_8);
+
+        System.out.println("[JSON generado]: " + outJson.toAbsolutePath());
+    }
+
+    // =======================
+    //        Helpers
+    // =======================
+
+    /** Recolecta HOJAS en orden de documento (profundidad primero) */
+    private static void collectLeavesInOrder(Node node, String path, List<Map.Entry<String, String>> out) {
+        if (node.hasAttributes()) {
+            NamedNodeMap attrs = node.getAttributes();
+            for (int i = 0; i < attrs.getLength(); i++) {
+                Node a = attrs.item(i);
+                String k = path + "." + a.getNodeName();
+                String v = a.getNodeValue();
+                if (v != null && !v.isEmpty()) {
+                    out.add(new AbstractMap.SimpleEntry<>(k, v.trim()));
+                }
+            }
+        }
+
+        NodeList children = node.getChildNodes();
+        List<Element> elems = new ArrayList<>();
+
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if (child.getNodeType() == Node.ELEMENT_NODE) {
+                elems.add((Element) child);
+            }
+        }
+
+        if (elems.isEmpty()) {
+            String text = node.getTextContent();
+            if (text != null && !text.trim().isEmpty()) {
+                out.add(new AbstractMap.SimpleEntry<>(path, text.trim()));
+            }
+            return;
+        }
+
+        for (Element e : elems) {
+            String tag = e.getNodeName();
+            collectLeavesInOrder(e, path + "." + tag, out);
+        }
+    }
+
+    /** Devuelve el último tag del path */
+    private static String getLastTag(String fullPath) {
+        int attrIdx = fullPath.lastIndexOf(".");
+        String name = (attrIdx == -1) ? fullPath : fullPath.substring(attrIdx + 1);
+        // Limpia espacios/raros por si acaso
+        return name.replaceAll("\\s+", "");
+    }
+
+    /** Evita duplicado exacto de una misma clave; si cambia, no usa [2] */
+    private static void putUniqueIfDiff(Map<String, String> map, String key, String value) {
+        if (!map.containsKey(key)) {
+            map.put(key, value);
+            return;
+        }
+        if (Objects.equals(map.get(key), value)) return;
+
+        // Si realmente llega una colisión (misma clave con valor distinto),
+        // generamos una nueva clave con sufijo incremental _2, _3, ...
+        int i = 2;
+        String candidate = key + "_" + i;
+        while (map.containsKey(candidate)) {
+            if (Objects.equals(map.get(candidate), value)) return;
+            i++;
+            candidate = key + "_" + i;
+        }
+        map.put(candidate, value);
+    }
+}

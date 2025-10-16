@@ -1,0 +1,237 @@
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.text.Normalizer;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.Locale;
+import java.util.stream.Collectors;
+
+@When("^Consulto datos desde el JSON y la BD con (\\w+)$")
+public void cargandoDatosOPF(String agentName, String nombreArchivo, String varName) throws Exception {
+
+    // ================= 0) Config =================
+    boolean failAtEnd = Boolean.parseBoolean(System.getProperty("opf.failAtEnd", "true"));
+    List<String> globalErrors = new ArrayList<>();
+
+    // ================= 1) Leer archivos base =================
+    Path rutaIds  = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+    if (!Files.exists(rutaIds)) throw new Exception("[OPF] No existe el archivo de identificador: " + rutaIds.toAbsolutePath());
+
+    Path rutaNums = Paths.get(System.getProperty("user.dir"), "numerosFormularioXML.txt");
+    if (!Files.exists(rutaNums)) throw new Exception("[OPF] No existe el archivo de números de formulario: " + rutaNums.toAbsolutePath());
+
+    List<String> ids = Files.readAllLines(rutaIds, StandardCharsets.UTF_8)
+            .stream().filter(s -> s != null && !s.isBlank())
+            .map(s -> s.replaceAll("[^0-9]", ""))
+            .collect(Collectors.toList());
+    if (ids.isEmpty()) throw new Exception("[OPF] Archivo de IDs vacío.");
+
+    List<String> numerosDec = Files.readAllLines(rutaNums, StandardCharsets.UTF_8)
+            .stream().filter(s -> s != null && !s.isBlank())
+            .collect(Collectors.toList());
+
+    // ================= 2) Leer JSON plano =================
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+    if (!Files.exists(rutaJson)) throw new Exception("[OPF] No existe el JSON: " + rutaJson.toAbsolutePath());
+
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+    Map<String, String> kv = JsonUtils.toMap(json);
+
+    System.out.println("[JSON] Campos cargados: " + kv.size());
+
+    // ================= 3) Iterar por bloques =================
+    int bloques = Math.max(ids.size(), numerosDec.size());
+    if (bloques == 0) throw new Exception("[OPF] No se detectaron bloques en el JSON.");
+
+    for (int i = 0; i < bloques; i++) {
+        String sufijo = "[" + (i + 1) + "]";
+        String id = ids.get(i);
+        String numeroDeclaracion = kv.get("OPF.numeroDeclaracion" + sufijo);
+        String fechaDeclaracion  = kv.get("OPF.fechaDeclaracion"  + sufijo);
+
+        // Validar datos mínimos
+        if (numeroDeclaracion == null || fechaDeclaracion == null
+                || numeroDeclaracion.isBlank() || fechaDeclaracion.isBlank()) {
+            String msg = "[OPF] Faltan datos mínimos para bloque " + sufijo
+                    + " en JSON: " + numeroDeclaracion + " / " + fechaDeclaracion;
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        // ================= 3.2 Determinar tabla según ID =================
+        String tabla, idCol1, dateCol1;
+        switch (id) {
+            case "1":
+                tabla   = "BAC_FMV1_FOR_INV_INTERNAS";
+                idCol1  = "D19S_NUM_DEC_JIINC";
+                dateCol1= "D19S_FECHA_DEC_JIINC";
+                break;
+            case "2":
+                tabla   = "BAC_FMV1_FOR_INV_EXTERNA";
+                idCol1  = "D19E_NUM_DEC_JIINC";
+                dateCol1= "D19E_FECHA_DEC_JIINC";
+                break;
+            case "3":
+                tabla   = "BAC_FMV1_FOR_DEUDA_EXTER";
+                idCol1  = "DEE_NUM_DEC_JIINC";
+                dateCol1= "DEE_FECHA_DEC_JIINC";
+                break;
+            case "4":
+                tabla   = "BAC_FMV1_FOR_IMPORT_BIENES";
+                idCol1  = "DIMP_NUM_DEC_JIINC";
+                dateCol1= "DIMP_FECHA_DEC_JIINC";
+                break;
+            case "5":
+                tabla   = "BAC_FMV1_FOR_SERV_TRANSF_OTROS";
+                idCol1  = "DST_NUM_DEC_JIINC";
+                dateCol1= "DST_FECHA_DEC_JIINC";
+                break;
+            default:
+                throw new IllegalArgumentException("Identificador de formulario desconocido: " + id);
+        }
+
+        // Fecha JSON -> formato Oracle dd-MMM-yy (en inglés)
+        String fechaFormateada = DateUtils.toOracleDayMonthYear(fechaDeclaracion);
+
+        // ================= 3.3 SQL =================
+        String sql = String.format(
+                "SELECT JSON_OBJECT(*) AS ROW_JSON FROM %s " +
+                "WHERE %s LIKE '%%%s%%' AND %s = '%s' FETCH FIRST 1 ROWS ONLY",
+                tabla, idCol1, numeroDeclaracion, dateCol1, fechaFormateada);
+
+        System.out.println("[BD] Consulta generada: " + sql);
+
+        // ================= 3.4 Ejecutar consulta =================
+        StepResult db;
+        try {
+            Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+            db = dbAgent.runMethod("query", new Object[]{sql});
+        } catch (Exception ex) {
+            String msg = "[BD] Error ejecutando query bloque " + sufijo + ": " + ex.getMessage();
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        if (db == null) {
+            String msg = "[BD] Resultado nulo bloque " + sufijo;
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        // ================= 3.5 Bloque de JSON =================
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+        if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+            String msg = "[BD] Respuesta vacía bloque " + sufijo;
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        getScenarioContext().saveLastStepResult(db, varName);
+
+        // ================= 3.6 Validación =================
+        Map<String, String> kvBlock = new LinkedHashMap<>();
+        kv.forEach((k, v) -> {
+            if (k.startsWith("OPF.") && k.endsWith(sufijo) && v != null && !v.isBlank()) {
+                kvBlock.put(k, v);
+            }
+        });
+
+        String jsonDb = rowJson; // sin normalizar aquí; la función de match normaliza
+
+        List<String> oks   = new ArrayList<>();
+        List<String> fails = new ArrayList<>();
+
+        for (Map.Entry<String, String> e : kvBlock.entrySet()) {
+            String keyWithSuffix = e.getKey();
+            String value         = e.getValue();
+
+            // “OPF.campo[1]” -> “OPF.campo”
+            String baseKey = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+
+            boolean found = containsJsonValue(jsonDb, value);
+            if (found) {
+                oks.add(String.format("%s = %s", baseKey, value));
+            } else {
+                fails.add(String.format("%s = %s", baseKey, value));
+            }
+        }
+
+        System.out.println(String.format("[RESUMEN] Bloque %s → OK:%d  FAIL:%d", sufijo, oks.size(), fails.size()));
+        if (!oks.isEmpty()) {
+            System.out.println("[OK] Campos encontrados:");
+            oks.forEach(s -> System.out.println("  ✓ " + s));
+        }
+        if (!fails.isEmpty()) {
+            System.out.println("[FAIL] Campos faltantes (no matchearon contra la BD):");
+            fails.forEach(s -> System.out.println("  ✗ " + s));
+            globalErrors.addAll(fails);
+        }
+    }
+
+    // ================= 4) Resumen final =================
+    if (globalErrors.isEmpty()) {
+        System.out.println("\n===== RESUMEN FINAL: TODO OK =====");
+    } else {
+        System.out.println("\n===== RESUMEN FINAL: HAY FALTANTES =====");
+        globalErrors.forEach(s -> System.out.println(" - " + s));
+        if (failAtEnd)
+            throw new AssertionError("Existen " + globalErrors.size() + " validaciones fallidas. Revisa el log.");
+    }
+}
+
+/* =========================
+   Helpers de comparación
+   ========================= */
+
+/** Normaliza cadena: quita tildes, pasa a minúsculas y elimina espacios. */
+private static String normalizeStringLex(String s) {
+    if (s == null) return "";
+    String u = Normalizer.normalize(s, Normalizer.Form.NFD)
+            .replaceAll("\\p{M}+", "");
+    return u.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+}
+
+/**
+ * Comparación flexible:
+ *  - Insensible a mayúsc/minúsc
+ *  - Ignora tildes y espacios
+ *  - Tolera separadores en montos (., , , espacios)
+ *  - Si el valor parece fecha yyyy-MM-dd, también prueba dd-MMM-yy (inglés) y viceversa
+ */
+private static boolean containsJsonValue(String haystackRaw, String expectedRaw) {
+    if (haystackRaw == null || expectedRaw == null) return false;
+
+    String haystack = normalizeStringLex(haystackRaw);
+    String needle   = normalizeStringLex(expectedRaw);
+    if (needle.isEmpty()) return false;
+
+    // Coincidencia directa normalizada
+    if (haystack.contains(needle)) return true;
+
+    // Números/montos: quitar separadores
+    String hayNoSep    = haystack.replaceAll("[,\\.\\s]", "");
+    String needleNoSep = needle.replaceAll("[,\\.\\s]", "");
+    if (!needleNoSep.isEmpty() && hayNoSep.contains(needleNoSep)) return true;
+
+    // yyyy-MM-dd -> dd-MMM-yy
+    try {
+        LocalDate d = LocalDate.parse(expectedRaw.trim());
+        String alt = d.format(DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH));
+        if (haystack.contains(normalizeStringLex(alt))) return true;
+    } catch (Exception ignore) {}
+
+    // dd-MMM-yy -> yyyy-MM-dd
+    try {
+        LocalDate d = LocalDate.parse(expectedRaw.trim(),
+                DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH));
+        String alt = d.toString(); // yyyy-MM-dd
+        if (haystack.contains(normalizeStringLex(alt))) return true;
+    } catch (Exception ignore) {}
+
+    return false;
+}

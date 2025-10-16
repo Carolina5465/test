@@ -1,0 +1,61 @@
+// ===== imports necesarios =====
+import java.text.Normalizer;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
+
+// ===== helpers genéricos =====
+private static <T> T firstNonNull(T a, T b) {
+    return (a != null) ? a : b;
+}
+
+private static String normalizeStringLex(String s) {
+    if (s == null) return "";
+    // quita tildes, pasa a minúsculas, comprime espacios
+    String u = Normalizer.normalize(s, Normalizer.Form.NFD)
+            .replaceAll("\\p{M}+", "");
+    u = u.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+    return u;
+}
+
+/**
+ * Comparación flexible para valores que vienen del JSON vs cadena de la BD.
+ * - Insensible a mayúsc/minúsc
+ * - Ignora tildes/espacios
+ * - Tolera separadores en montos (., , , espacios)
+ * - Si el valor parece fecha yyyy-MM-dd, también prueba dd-MMM-yy (inglés) y viceversa
+ */
+private static boolean containsJsonValue(String haystackRaw, String expectedRaw) {
+    if (haystackRaw == null || expectedRaw == null) return false;
+
+    String haystack = normalizeStringLex(haystackRaw);
+    String needle   = normalizeStringLex(expectedRaw);
+    if (needle.isEmpty()) return false;
+
+    // match directo
+    if (haystack.contains(needle)) return true;
+
+    // números / montos: quitar separadores
+    String hayNoSep   = haystack.replaceAll("[,\\.\\s]", "");
+    String needleNoSep = needle.replaceAll("[,\\.\\s]", "");
+    if (!needleNoSep.isEmpty() && hayNoSep.contains(needleNoSep)) return true;
+
+    // fechas: yyyy-MM-dd -> dd-MMM-yy
+    try {
+        LocalDate d = LocalDate.parse(expectedRaw.trim()); // intenta yyyy-MM-dd
+        String alt = d.format(DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH));
+        if (haystack.contains(normalizeStringLex(alt))) return true;
+    } catch (Exception ignore) { /* no era yyyy-MM-dd */ }
+
+    // fechas: dd-MMM-yy -> yyyy-MM-dd
+    try {
+        LocalDate d = LocalDate.parse(
+                expectedRaw.trim(),
+                DateTimeFormatter.ofPattern("dd-MMM-yy", Locale.ENGLISH)
+        );
+        String alt = d.toString(); // yyyy-MM-dd
+        if (haystack.contains(normalizeStringLex(alt))) return true;
+    } catch (Exception ignore) { /* no era dd-MMM-yy */ }
+
+    return false;
+}

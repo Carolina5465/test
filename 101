@@ -1,0 +1,35 @@
+// Devuelve true si el JSON de la BD contiene los últimos N dígitos del valor
+private static boolean containsLastNDigits(String jsonHaystack, String rawValue, int n) {
+    if (jsonHaystack == null || rawValue == null) return false;
+    String hay = jsonHaystack.replaceAll("\\D", ""); // deja solo dígitos en la BD
+    String val = rawValue.replaceAll("\\D", "");     // deja solo dígitos del JSON
+    if (val.isEmpty()) return false;
+    // toma los últimos N (o todos si tiene menos de N)
+    String lastN = (val.length() > n) ? val.substring(val.length() - n) : val;
+    return hay.contains(lastN);
+}
+
+
+for (Map.Entry<String, String> e : kvBlock) {
+    String keyWithSuffix = e.getKey();
+    String value         = e.getValue();
+    String baseKey       = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+
+    if (shouldSkip(baseKey)) {   // tu filtro actual (NO incluyas numeroDeclaracion aquí)
+        skips.add(baseKey);
+        continue;
+    }
+
+    boolean match;
+    if (baseKey.endsWith("_numeroDeclaracion")) {
+        // *** REGLA ESPECIAL: validar por últimos 5 dígitos ***
+        match = containsLastNDigits(rowJson, value, 5);
+    } else {
+        // comparación flexible que ya tenías (ignora mayúsculas, tildes, espacios, etc.)
+        match = containsJsonValue(rowJson, value);
+    }
+
+    String printable = baseKey + " = " + value;
+    if (match)  { oks.add(printable); }
+    else        { fails.add(printable); }
+}

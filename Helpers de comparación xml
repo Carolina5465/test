@@ -1,0 +1,97 @@
+// =======================
+//     Helpers MATCH
+// =======================
+
+/** Normaliza: quita tildes, pasa a mayúsculas y elimina todos los espacios */
+private static String normalize(String s) {
+    if (s == null) return "";
+    String u = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "");          // sin acentos
+    u = u.toUpperCase(java.util.Locale.ROOT)
+         .replaceAll("\\s+", "");               // sin espacios
+    return u;
+}
+
+/** Intenta convertir fechas entre yyyy-MM-dd y dd-MMM-yy (Locale.ENGLISH). Si falla, devuelve null */
+private static String tryReformatDate(String s) {
+    if (s == null) return null;
+    try {
+        // JSON suele traer ISO 8601 -> Oracle (dd-MMM-yy)
+        java.time.LocalDate d = java.time.LocalDate.parse(s); // yyyy-MM-dd
+        return d.format(java.time.format.DateTimeFormatter.ofPattern("dd-MMM-yy", java.util.Locale.ENGLISH))
+                .toUpperCase(java.util.Locale.ENGLISH);
+    } catch (Exception ignore) { }
+    try {
+        // Oracle -> ISO
+        java.time.format.DateTimeFormatter ORA = java.time.format.DateTimeFormatter.ofPattern("dd-MMM-yy", java.util.Locale.ENGLISH);
+        java.time.LocalDate d = java.time.LocalDate.parse(s.toUpperCase(java.util.Locale.ENGLISH), ORA);
+        return d.toString(); // yyyy-MM-dd
+    } catch (Exception ignore) { }
+    return null;
+}
+
+/** Normaliza números: quita separadores, ceros a la izquierda; conserva decimales */
+private static String normalizeNumber(String s) {
+    if (s == null) return null;
+    String t = s.trim();
+    // quita comas/espacios
+    t = t.replaceAll("[\\s,]", "");
+    // si es tipo 0000123.00 -> 123.00
+    if (t.matches("0+\\d+\\.\\d+")) {
+        t = t.replaceFirst("^0+(?=\\d)", "");
+    } else if (t.matches("0+\\d+")) {
+        t = t.replaceFirst("^0+(?=\\d)", "");
+    }
+    return t;
+}
+
+/**
+ * Comparación flexible:
+ *  - texto: sin tildes, sin espacios, case-insensitive
+ *  - números: ignora comas/espacios/ceros a la izquierda
+ *  - fechas: yyyy-MM-dd <-> dd-MMM-yy (EN)
+ */
+private static boolean containsJsonValue(String json, String rawValue) {
+    if (json == null || rawValue == null) return false;
+
+    // 1) Intento directo
+    if (json.contains(rawValue)) return true;
+
+    // 2) Texto normalizado (sin tildes/espacios, mayúsculas)
+    String hayN = normalize(json);
+    String needleN = normalize(rawValue);
+    if (!needleN.isEmpty() && hayN.contains(needleN)) return true;
+
+    // 3) Números normalizados
+    String needleNum = normalizeNumber(rawValue);
+    if (needleNum != null && !needleNum.equals(rawValue)) {
+        // probar contra json sin comas/espacios
+        String hayNum = json.replaceAll("[\\s,]", "");
+        if (hayNum.contains(needleNum)) return true;
+        // también contra normalizado completo
+        if (normalize(hayNum).contains(normalize(needleNum))) return true;
+    }
+
+    // 4) Fechas en ambos sentidos
+    String altDate = tryReformatDate(rawValue);
+    if (altDate != null) {
+        if (json.contains(altDate)) return true;
+        if (hayN.contains(normalize(altDate))) return true;
+    }
+
+    return false;
+}
+
+
+
+
+
+for (Map.Entry<String, String> e : kvBlock.entrySet()) {
+    String keyWithSuffix = e.getKey();
+    String value = e.getValue();
+    String baseKey = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+
+    boolean match = containsJsonValue(rowJson, value);
+    if (match) oks.add(baseKey);
+    else       fails.add(baseKey);
+}

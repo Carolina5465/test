@@ -1,0 +1,27 @@
+List<String> oks   = new ArrayList<>();
+List<String> fails = new ArrayList<>();
+
+for (Map.Entry<String, String> e : kvBlock) {
+    String keyWithSuffix = e.getKey();
+    String value         = e.getValue();
+    String baseKey       = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+
+    boolean match = containsJsonValue(rowJson, value); // tu helper flexible
+    String printable = baseKey + " = " + value;        // <-- guardamos llave y valor
+
+    if (match) oks.add(printable);
+    else       fails.add(printable);
+}
+
+System.out.println(String.format("[RESUMEN] Bloque %s -> OK:%d  FAIL:%d",
+        sufijo, oks.size(), fails.size()));
+
+if (!oks.isEmpty()) {
+    System.out.println("[OK] Campos encontrados:");
+    oks.forEach(s -> System.out.println("  ✓ " + s));   // imprime 'llave = valor'
+}
+if (!fails.isEmpty()) {
+    System.out.println("[FAIL] Campos faltantes:");
+    fails.forEach(s -> System.out.println("  ✗ " + s)); // imprime 'llave = valor'
+    globalErrors.addAll(fails);
+}

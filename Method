@@ -1,0 +1,66 @@
+/** Match flexible para valores provenientes del JSON de la BD.
+ *  - Para textos: hace match quoted o bare con límites de palabra.
+ *  - Para números: intenta el valor original y versiones SIN ceros a la izquierda,
+ *    además de normalizaciones de decimales (quita ceros de cola).
+ */
+private static boolean containsJsonValue(String json, String rawValue) {
+    if (json == null || rawValue == null) return false;
+    String j = json;
+
+    // Lista de "candidatos" que vamos a intentar encontrar en el JSON
+    List<String> probes = new ArrayList<>();
+    probes.add(rawValue);
+
+    // ¿Parece número? (con o sin decimales, con coma o punto)
+    if (rawValue.trim().matches("^[0-9]+([.,][0-9]+)?$")) {
+        // Canonical: cambia coma por punto y quita ceros a la izquierda del entero
+        String canon = canonicalNumber(rawValue);
+        probes.add(canon);
+
+        // Otra variante: sin ceros de cola en la parte decimal (si aplica)
+        String canonTrim = trimDecimalZeros(canon);
+        if (!canonTrim.equals(canon)) probes.add(canonTrim);
+
+        // Variante con coma como separador decimal (por si la BD/JSON serializa con coma)
+        if (canon.contains(".")) {
+            probes.add(canon.replace('.', ','));
+            probes.add(canonTrim.replace('.', ','));
+        }
+    }
+
+    // Probar cada candidato en el JSON (quoted o bare, con límites)
+    for (String p : probes) {
+        if (p == null || p.isBlank()) continue;
+        if (containsQuotedOrBare(j, p)) return true;
+    }
+    return false;
+}
+
+/** Busca 'value' como string con comillas o como valor "desnudo" con límites de palabra. */
+private static boolean containsQuotedOrBare(String json, String value) {
+    String quoted = Pattern.quote("\"" + value + "\"");
+    if (Pattern.compile(quoted).matcher(json).find()) return true;
+
+    String bare = "(?<![A-Za-z0-9_])" + Pattern.quote(value) + "(?![A-Za-z0-9_])";
+    return Pattern.compile(bare).matcher(json).find();
+}
+
+/** Normaliza número: coma->punto, quita ceros a la izquierda del entero. */
+private static String canonicalNumber(String s) {
+    String v = s.trim().replace(',', '.');
+    String[] parts = v.split("\\.", -1);
+    String intPart = parts[0].replaceFirst("^0+(?!$)", ""); // deja un cero si todo eran ceros
+    if (intPart.isEmpty()) intPart = "0";
+    if (parts.length == 1) return intPart;
+    String dec = parts[1];
+    return intPart + "." + dec;
+}
+
+/** Si hay decimales, quita ceros de cola y el punto final si queda vacío. */
+private static String trimDecimalZeros(String s) {
+    if (!s.contains(".")) return s;
+    String[] parts = s.split("\\.", -1);
+    String intPart = parts[0];
+    String dec = parts[1].replaceFirst("0+$", "");
+    return dec.isEmpty() ? intPart : intPart + "." + dec;
+}

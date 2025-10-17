@@ -1,0 +1,99 @@
+public void extraigoDatosDelUltimoXML(String carpetaXml, String prefijo) throws Exception {
+    // 1) Validar carpeta
+    Path dir = Paths.get(carpetaXml);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("Carpeta no válida: " + dir.toAbsolutePath());
+    }
+
+    // 2) Tomar el XML más reciente
+    Path ultimoXml = Files.list(dir)
+            .filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".xml"))
+            .max(Comparator.comparing(p -> {
+                try { return Files.getLastModifiedTime(p); }
+                catch (Exception e) { return FileTime.fromMillis(0L); }
+            }))
+            .orElseThrow(() -> new Exception("No se encontraron .xml en: " + dir.toAbsolutePath()));
+
+    System.out.println("[XML reciente] " + ultimoXml.getFileName() +
+            " | fecha: " + Files.getLastModifiedTime(ultimoXml));
+
+    // 3) Parsear XML
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    dbf.setNamespaceAware(false);
+    dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+    DocumentBuilder db = dbf.newDocumentBuilder();
+    Document doc = db.parse(ultimoXml.toFile());
+    doc.getDocumentElement().normalize();
+
+    // === A) Hojas en orden de documento (fullPath -> valor) ===
+    List<Map.Entry<String,String>> leaves = new ArrayList<>();
+    collectLeavesInOrder(doc.getDocumentElement(), doc.getDocumentElement().getNodeName(), leaves);
+    System.out.println("[XML] Total de hojas encontradas: " + leaves.size());
+
+    // === B) Agrupar por TRAMOS guiados por numeroDeclaracion ===
+    Map<String, String> shortMap = new LinkedHashMap<>();
+
+    int tramoIdx = 0;                  // 0 -> aún no empezó ningún tramo
+    String lastNumeroDecl = null;      // para saber cuándo cambia
+    List<Map.Entry<String,String>> preBuffer = new ArrayList<>(); // campos antes del primer numeroDeclaracion
+
+    for (Map.Entry<String,String> leaf : leaves) {
+        String fullPath = leaf.getKey();
+        String lastTag  = getLastTag(fullPath);     // p.ej.: numeroDeclaracion, nombreExportador, etc.
+        String value    = leaf.getValue();
+        if (value == null || value.isBlank()) continue;
+
+        boolean isNumeroDecl = lastTag.equalsIgnoreCase("numeroDeclaracion");
+
+        if (isNumeroDecl) {
+            if (tramoIdx == 0) {
+                // Primer numeroDeclaracion -> comienza el tramo 1
+                tramoIdx = 1;
+                lastNumeroDecl = value;
+
+                // Todo lo que estaba antes del primer numeroDeclaracion pertenece al tramo 1
+                for (Map.Entry<String,String> b : preBuffer) {
+                    String t  = getLastTag(b.getKey());
+                    String bk = prefijo + "_" + t;                // OPF_<campo>
+                    putUniqueIfDiff(shortMap, bk + "_" + tramoIdx, b.getValue().trim());
+                }
+                preBuffer.clear();
+            } else if (!value.equals(lastNumeroDecl)) {
+                // Nuevo valor -> nuevo tramo
+                tramoIdx++;
+                lastNumeroDecl = value;
+            }
+
+            // Guardar el propio numeroDeclaracion del tramo actual
+            putUniqueIfDiff(shortMap, prefijo + "_" + lastTag + "_" + tramoIdx, value.trim());
+        } else {
+            if (tramoIdx == 0) {
+                // Aún no apareció numeroDeclaracion: lo dejamos en buffer
+                preBuffer.add(leaf);
+            } else {
+                // Ya estamos en un tramo: guardar con el sufijo actual
+                String basekey = prefijo + "_" + lastTag;         // OPF_<campo>
+                putUniqueIfDiff(shortMap, basekey + "_" + tramoIdx, value.trim());
+            }
+        }
+    }
+
+    // Si por alguna razón nunca apareció numeroDeclaracion, cae todo al tramo 1
+    if (tramoIdx == 0 && !preBuffer.isEmpty()) {
+        tramoIdx = 1;
+        for (Map.Entry<String,String> b : preBuffer) {
+            String t  = getLastTag(b.getKey());
+            String bk = prefijo + "_" + t;
+            putUniqueIfDiff(shortMap, bk + "_" + tramoIdx, b.getValue().trim());
+        }
+    }
+
+    // Log útil
+    shortMap.forEach((k, v) -> System.out.println("[OPF] " + k + " -> " + v));
+
+    // === C) Guardar JSON resultado ===
+    Path outJson = Paths.get(System.getProperty("user.dir"), "ultimo_xml_OPF.json");
+    String json = new Gson().toJson(shortMap);
+    Files.write(outJson, json.getBytes(StandardCharsets.UTF_8));
+    System.out.println("[JSON] guardado en: " + outJson.toAbsolutePath());
+}

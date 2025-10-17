@@ -1,0 +1,55 @@
+// Claves base (sin sufijo [_N]) que NO se validan contra la BD
+private static final Set<String> SKIP_KEYS = new HashSet<>(Arrays.asList(
+    "OPF_numeralCambiario"   // <- la que pediste
+));
+
+// ¿Debemos saltarnos esta clave?
+private static boolean shouldSkip(String baseKey) {
+    if (baseKey == null) return false;
+    String k = baseKey.trim().toLowerCase(Locale.ROOT);
+    // igualdad exacta por ahora; si algún día quieres patrones, aquí se agregan
+    return SKIP_KEYS.stream()
+            .map(s -> s.toLowerCase(Locale.ROOT))
+            .anyMatch(s -> s.equals(k));
+}
+
+
+
+
+List<String> oks   = new ArrayList<>();
+List<String> fails = new ArrayList<>();
+List<String> skips = new ArrayList<>(); // opcional, para log
+
+for (Map.Entry<String, String> e : kvBlock.entrySet()) {
+    String keyWithSuffix = e.getKey();
+    String value         = e.getValue();
+    String baseKey       = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+
+    // --- NUEVO: saltar claves que no están en la BD ---
+    if (shouldSkip(baseKey)) {
+        skips.add(baseKey);
+        continue;
+    }
+
+    boolean match = containsJsonValue(rowJson, value);  // tu helper flexible números/texto
+    String printable = baseKey + " = " + value;
+
+    if (match)  oks.add(printable);
+    else        fails.add(printable);
+}
+
+// logs (deja como lo tenías; agrego los SKIP si quieres verlos)
+System.out.println(String.format("[RESUMEN] Bloque %s -> OK:%d  FAIL:%d", sufijo, oks.size(), fails.size()));
+if (!skips.isEmpty()) {
+    System.out.println("[SKIP] Claves omitidas (no se validan en BD):");
+    skips.forEach(s -> System.out.println(" ~ " + s));
+}
+if (!oks.isEmpty()) {
+    System.out.println("[OK] Campos encontrados:");
+    oks.forEach(s -> System.out.println(" ✓ " + s));
+}
+if (!fails.isEmpty()) {
+    System.out.println("[FAIL] Campos faltantes:");
+    fails.forEach(s -> System.out.println(" ✗ " + s));
+    globalErrors.addAll(fails);
+}

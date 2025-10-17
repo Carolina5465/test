@@ -1,0 +1,79 @@
+// ===== MATCH flexible (números + textos) =====
+
+private static boolean containsJsonValue(String json, String rawValue) {
+    if (json == null || rawValue == null) return false;
+
+    String v = rawValue.trim();
+    if (v.isEmpty()) return false;
+
+    // 1) ¿Parece número? (solo dígitos con opcional coma o punto y decimales)
+    if (v.matches("^[0-9]+([.,][0-9]+)?$")) {
+        List<String> probes = new ArrayList<>();
+
+        // original
+        probes.add(v);
+
+        // canon: coma->punto, sin ceros a la izquierda
+        String canon = canonicalNumber(v);
+        probes.add(canon);
+
+        // sin ceros de cola en decimales
+        String canonTrim = trimDecimalZeros(canon);
+        if (!canonTrim.equals(canon)) probes.add(canonTrim);
+
+        // variantes con coma (por si el JSON serializa con coma)
+        if (canon.contains(".")) {
+            probes.add(canon.replace('.', ','));
+            probes.add(canonTrim.replace('.', ','));
+        }
+
+        for (String p : probes) {
+            if (containsQuotedOrBare(json, p)) return true;
+        }
+        return false;
+    }
+
+    // 2) Texto: comparación flexible (ignora tildes/mayúsculas/espacios)
+    String hay = normalizeTextFlex(json);
+    String val = normalizeTextFlex(v);
+    if (!val.isEmpty() && hay.contains(val)) return true;
+
+    // 3) Fallback exacto (por si se requiere coincidencia estricta visible en el JSON)
+    return containsQuotedOrBare(json, v);
+}
+
+/** Busca 'value' como string con comillas o como valor "desnudo" con límites de palabra. */
+private static boolean containsQuotedOrBare(String json, String value) {
+    String quoted = Pattern.quote("\"" + value + "\"");
+    if (Pattern.compile(quoted).matcher(json).find()) return true;
+
+    String bare = "(?<![A-Za-z0-9_])" + Pattern.quote(value) + "(?![A-Za-z0-9_])";
+    return Pattern.compile(bare).matcher(json).find();
+}
+
+/** Normaliza texto: quita tildes, pasa a mayúsculas y elimina espacios y signos no alfanuméricos. */
+private static String normalizeTextFlex(String s) {
+    String u = Normalizer.normalize(s, Normalizer.Form.NFD);
+    u = u.replaceAll("\\p{M}", "");          // quita diacríticos
+    u = u.toUpperCase(Locale.ROOT);
+    u = u.replaceAll("[^\\p{Alnum}]+", "");  // quita todo salvo letras y números (incluye espacios)
+    return u;
+}
+
+/** Normaliza número: coma->punto y quita ceros a la izquierda de la parte entera. */
+private static String canonicalNumber(String s) {
+    String v = s.trim().replace(',', '.');
+    String[] parts = v.split("\\.", -1);
+    String intPart = parts[0].replaceFirst("^0+(?!$)", ""); // deja un '0' si todo eran ceros
+    if (intPart.isEmpty()) intPart = "0";
+    if (parts.length == 1) return intPart;
+    return intPart + "." + parts[1];
+}
+
+/** Quita ceros de cola de la parte decimal; si queda vacía, quita el punto. */
+private static String trimDecimalZeros(String s) {
+    if (!s.contains(".")) return s;
+    String[] parts = s.split("\\.", -1);
+    String dec = parts[1].replaceFirst("0+$", "");
+    return dec.isEmpty() ? parts[0] : parts[0] + "." + dec;
+}

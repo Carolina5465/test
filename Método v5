@@ -1,0 +1,225 @@
+@When("^Consulto datos desde el JSON y la BD con (\\w+)$")
+public void cargandodatosOPF(String agentName, String nombreArchivo, String varName) throws Exception {
+
+    // === Configuración inicial ===
+    boolean failAtEnd = Boolean.parseBoolean(System.getProperty("opf.failAtEnd", "true"));
+    List<String> globalErrors = new ArrayList<>();
+
+    // === Leer archivos base ===
+    Path rutaIds = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+    if (!Files.exists(rutaIds))
+        throw new Exception("[OPF] No existe el archivo de identificador: " + rutaIds.toAbsolutePath());
+
+    List<String> ids = Files.readAllLines(rutaIds, StandardCharsets.UTF_8)
+            .stream()
+            .filter(s -> s != null && !s.isBlank())
+            .map(s -> s.replaceAll("[^0-9]", ""))
+            .toList();
+
+    if (ids.isEmpty())
+        throw new Exception("[OPF] Archivo de IDs vacío.");
+
+    // === Leer archivo JSON ===
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreArchivo);
+    if (!Files.exists(rutaJson))
+        throw new Exception("[OPF] No existe el JSON: " + rutaJson.toAbsolutePath());
+
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+    Map<String, String> kv = JsonUtils.parseToMap(json);
+
+    System.out.println("[JSON] Campos cargados: " + kv.size());
+
+    // === Iterar por cada ID ===
+    for (int i = 0; i < ids.size(); i++) {
+        int idx = i + 1;
+        String sufijo = "[" + idx + "]";
+        String id = ids.get(i);
+
+        // -- toma robusta de número/fecha (acepta OPF_numeroDeclaracion[1], OPF.numeroDeclaracion[1] u OPF[1].numeroDeclaracion)
+        String numeroDeclaracion = getBlockValue(kv, "numeroDeclaracion", idx);
+        String fechaDeclaracion  = getBlockValue(kv, "fechaDeclaracion",  idx);
+
+        if (isBlank(numeroDeclaracion) || isBlank(fechaDeclaracion)) {
+            String msg = "[OPF] Faltan datos mínimos para bloque " + sufijo + " en JSON: "
+                    + numeroDeclaracion + " / " + fechaDeclaracion;
+            System.out.println(msg);
+
+            // Debug útil: listar claves OPF para ver cómo llegaron
+            kv.keySet().stream().filter(k -> k.startsWith("OPF")).sorted()
+                    .forEach(k -> System.out.println("  [JSON key] " + k + " = " + kv.get(k)));
+
+            globalErrors.add(msg);
+            continue;
+        }
+
+        // === 3.2 Determinar tabla ===
+        String tabla, idCol1, dateCol1;
+        switch (id) {
+            case "1":
+                tabla = "BAC_FMV1_FOR_IMPORT_BIENES";
+                idCol1 = "DII_NUM_DEC_JIINC";
+                dateCol1 = "DII_FECHA_DEC_JIINC";
+                break;
+            case "2":
+                tabla = "BAC_FMV1_FOR_DECLA_EXPORT_BIEN";
+                idCol1 = "DEB_NUM_DEC_JIINC";
+                dateCol1 = "DEB_FECHA_DEC_JIINC";
+                break;
+            case "3":
+                tabla = "BAC_FMV1_FOR_ENDEUDA_EXTER";
+                idCol1 = "DEE_NUM_DEC_JIINC";
+                dateCol1 = "DEE_FECHA_DEC_JIINC";
+                break;
+            case "4":
+                tabla = "BAC_FMV1_FOR_INV_INTERNAS";
+                idCol1 = "DIB_NUM_DEC_JIINC";
+                dateCol1 = "DIB_FECHA_DEC_JIINC";
+                break;
+            case "5":
+                tabla = "BAC_FMV1_FOR_SERV_TRANSF_OTROS";
+                idCol1 = "DST_NUM_DEC_JIINC";
+                dateCol1 = "DST_FECHA_DEC_JIINC";
+                break;
+            default:
+                throw new IllegalArgumentException("Identificador de formulario desconocido: " + id);
+        }
+
+        // === 3.3 SQL ===
+        String fechaFormateada = DateUtils.toOracleDayMonthYear(fechaDeclaracion); // yyyy-MM-dd -> dd-MMM-yy
+        String sql = "SELECT JSON_OBJECT(*) AS ROW_JSON FROM " + tabla +
+                " WHERE " + idCol1 + " LIKE '%" + numeroDeclaracion + "%' " +
+                "AND " + dateCol1 + " = '" + fechaFormateada + "' FETCH FIRST 1 ROWS ONLY";
+
+        System.out.println("[SQL] Consulta realizada: " + sql);
+
+        StepResult db;
+        try {
+            Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+            db = dbAgent.runMethod("query", new Object[]{sql});
+        } catch (Exception ex) {
+            String msg = "[BD] Error ejecutando query bloque " + sufijo + ": " + ex.getMessage();
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        if (db == null) {
+            String msg = "[BD] Resultado nulo bloque " + sufijo;
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+        if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+            String msg = "[BD] Respuesta vacía bloque " + sufijo;
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        getScenarioContext().saveLastStepResult(db, varName);
+
+        // === 3.6 Validación ===
+        // Incluimos TODAS las claves OPF que contengan el índice [n] en cualquier posición
+        Map<String, String> kvBlock = new LinkedHashMap<>();
+        kv.forEach((k, v) -> {
+            if (k.startsWith("OPF") && k.contains(sufijo) && v != null && !v.isBlank()) {
+                kvBlock.put(k, v);
+            }
+        });
+
+        List<String> oks = new ArrayList<>();
+        List<String> fails = new ArrayList<>();
+
+        for (Map.Entry<String, String> e : kvBlock.entrySet()) {
+            String keyWithSuffix = e.getKey();
+            String value = e.getValue();
+
+            // BaseKey “bonito” para log: OPF.campo
+            String baseKey = normalizeBaseKey(keyWithSuffix, idx);
+
+            // Comparación flexible SOLO para textos (ignora tildes/mayúsculas/espacios)
+            boolean found = containsTextFlexible(rowJson, value);
+            if (found) oks.add(baseKey);
+            else fails.add(baseKey);
+        }
+
+        System.out.println(String.format("[RESUMEN] Bloque %s -> OK:%d  FAIL:%d",
+                sufijo, oks.size(), fails.size()));
+
+        if (!oks.isEmpty()) {
+            System.out.println("[OK] Campos encontrados:");
+            oks.forEach(s -> System.out.println("  ✓ " + s));
+        }
+        if (!fails.isEmpty()) {
+            System.out.println("[FAIL] Campos faltantes:");
+            fails.forEach(s -> System.out.println("  ✗ " + s));
+            globalErrors.addAll(fails);
+        }
+    }
+
+    // === Resumen final ===
+    if (globalErrors.isEmpty()) {
+        System.out.println("\n===== RESUMEN FINAL: TODO OK =====");
+    } else {
+        System.out.println("\n===== RESUMEN FINAL: HAY FALTANTES =====");
+        globalErrors.forEach(s -> System.out.println(" - " + s));
+        if (failAtEnd)
+            throw new AssertionError("Existen " + globalErrors.size() +
+                    " validaciones fallidas. Revisa el log.");
+    }
+}
+
+/* =========================
+ *          Helpers
+ * ========================= */
+
+/** true si la cadena es null o vacía/espacios */
+private static boolean isBlank(String s) { return s == null || s.trim().isEmpty(); }
+
+/** 
+ * Obtiene un campo del bloque idx aceptando distintas variantes de clave:
+ * - OPF_numeroDeclaracion[1]
+ * - OPF.numeroDeclaracion[1]
+ * - OPF[1].numeroDeclaracion
+ * - OPF.numeroDeclaracion_1
+ */
+private static String getBlockValue(Map<String,String> kv, String field, int idx) {
+    String suf = "[" + idx + "]";
+    String v = kv.get("OPF_" + field + suf);
+    if (isBlank(v)) v = kv.get("OPF." + field + suf);
+    if (isBlank(v)) v = kv.get("OPF" + suf + "." + field);
+    if (isBlank(v)) v = kv.get("OPF." + field + "_" + idx);
+    return v;
+}
+
+/** Para el log: normaliza la clave a “OPF.campo” sin índice sin importar el formato original */
+private static String normalizeBaseKey(String rawKey, int idx) {
+    String suf = "\\[" + idx + "\\]";
+    String k = rawKey;
+    k = k.replace("OPF_", "OPF.");                                  // OPF_campo -> OPF.campo
+    k = k.replaceAll(suf, "");                                      // quita [n] donde esté
+    k = k.replaceAll("OPF\\." + idx + "\\.", "OPF.");               // por si viniera “OPF.1.”
+    k = k.replaceAll("OPF\\[" + idx + "\\]\\.", "OPF.");            // OPF[n].campo -> OPF.campo
+    return k;
+}
+
+/** Comparación flexible: ignora mayúsculas, tildes y espacios (para textos tipo “Manzana Verde”) */
+private static boolean containsTextFlexible(String jsonHaystack, String rawValue) {
+    if (jsonHaystack == null || rawValue == null) return false;
+    String hay = normalizeText(jsonHaystack);
+    String val = normalizeText(rawValue);
+    if (val.isEmpty()) return false;
+    return hay.contains(val);
+}
+
+/** Normalizo texto quitando tildes, mayúsculas y espacios */
+private static String normalizeText(String s) {
+    if (s == null) return "";
+    String u = Normalizer.normalize(s, Normalizer.Form.NFD);
+    u = u.replaceAll("\\p{M}", "");        // quita tildes
+    u = u.toUpperCase(Locale.ROOT);        // a mayúsculas
+    u = u.replaceAll("\\s+", "");          // sin espacios
+    return u.trim();
+}

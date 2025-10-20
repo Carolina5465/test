@@ -1,0 +1,183 @@
+@When("^Valido XML procesado en BD con (\\w+)$")
+public void validoXmlProcesadoEnBD(String agentName) throws Exception {
+
+    // ========= 1) Tomar el último XML (igual que en tu extractor) =========
+    Path dir = Paths.get(System.getProperty("user.dir"), "feature", "balanza-cambiaria"); // ajusta si tu ruta difiere
+    Path ultimoXml = Files.list(dir)
+            .filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".xml"))
+            .max(Comparator.comparing(p -> {
+                try { return Files.getLastModifiedTime(p); }
+                catch (Exception e) { return FileTime.fromMillis(0L); }
+            }))
+            .orElseThrow(() -> new Exception("No hay .xml en: " + dir.toAbsolutePath()));
+
+    String nombreArchivoXml = ultimoXml.getFileName().toString();
+
+    // ========= 2) Cargar el JSON ya generado del XML (shortMap por tramos) =========
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), "ultimo_xml_OPF.json"); // el mismo que ya guardas
+    if (!Files.exists(rutaJson)) throw new Exception("No existe el JSON: " + rutaJson.toAbsolutePath());
+
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+    Map<String, String> kv = JsonUtils.parseToMap(json);
+
+    // Descubrir cuántos tramos hay mirando OPF_numeroDeclaracion_i
+    List<Integer> tramos = kv.keySet().stream()
+            .filter(k -> k.startsWith("OPF_numeroDeclaracion_"))
+            .map(k -> Integer.parseInt(k.substring(k.lastIndexOf('_') + 1)))
+            .sorted()
+            .toList();
+
+    if (tramos.isEmpty()) throw new Exception("No se hallaron tramos (OPF_numeroDeclaracion_i) en el JSON.");
+
+    // ========= 3) Conectar al agente de BD =========
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+
+    List<String> globalErrors = new ArrayList<>();
+    boolean failAtEnd = true; // o por system prop si prefieres
+
+    for (Integer i : tramos) {
+        String sufijo = "_" + i;
+
+        // Campos del tramo
+        String numeroDecl = kv.getOrDefault("OPF_numeroDeclaracion" + sufijo, "");
+        String fechaDecl   = kv.getOrDefault("OPF_fechaDeclaracion"   + sufijo, "");
+        String tipoDoc     = kv.getOrDefault("OPF_tipoDocumentoImportador" + sufijo, "");
+        String numDoc      = kv.getOrDefault("OPF_numeroDocumentoImportador" + sufijo, "");
+        String nombreImp   = kv.getOrDefault("OPF_nombreImportador" + sufijo, "");
+        String moneda      = kv.getOrDefault("OPF_monedaNegociacion" + sufijo, "");
+        String tasa        = kv.getOrDefault("OPF_tasaCambioDolares" + sufijo, "");
+        String valorTotal  = kv.getOrDefault("OPF_valorTotalDolares" + sufijo, "");
+        String valorFob    = kv.getOrDefault("OPF_valorFob" + sufijo, "");
+        String gastosExp   = kv.getOrDefault("OPF_valorGastosExportacion" + sufijo, "");
+        String reintegro   = kv.getOrDefault("OPF_valorReintegroNeto" + sufijo, "");
+        String devolucion  = kv.getOrDefault("OPF_devolucion" + sufijo, "");
+        String infoCons    = kv.getOrDefault("OPF_informacionConsolidada" + sufijo, "");
+        String tipoEntidad = kv.getOrDefault("OPF_tipoEntidad" + sufijo, "");
+
+        // últimos 5 del número de declaración
+        String ult5 = (numeroDecl == null) ? "" :
+                numeroDecl.replaceAll("\\D", ""); // solo dígitos
+        if (ult5.length() > 5) ult5 = ult5.substring(ult5.length() - 5);
+
+        // Oracle: fecha dd-MON-yy (igual a tu helper)
+        String fechaOracle = DateUtils.toOracleDayMonthYear(fechaDecl);
+
+        // ========= 4) Query: buscamos la fila del TRAMO en BD =========
+        // Ajusta nombres de columnas según tu tabla real (usé prefijos FP_ por la captura)
+        String sql = """
+            SELECT JSON_OBJECT(*) AS ROW_JSON
+            FROM BAC_FORMULARIOSPROCESADOS_XML
+            WHERE FP_NOMBREARCHIVO = '%s'
+              AND TO_CHAR(FP_NUMERODECLARACION) LIKE '%%%s'
+              AND TO_CHAR(FP_FECHA,'DD-MON-YY') = '%s'
+            FETCH FIRST 1 ROWS ONLY
+            """.formatted(nombreArchivoXml, ult5, fechaOracle);
+
+        System.out.println("[SQL] BLOQUE " + i + " -> " + sql);
+
+        StepResult db = dbAgent.runMethod("query", new Object[]{sql});
+        if (db == null || db.getFieldValue("ROW_JSON") == null) {
+            globalErrors.add("Bloque " + i + ": sin fila en BD para archivo=" + nombreArchivoXml
+                    + ", ult5=" + ult5 + ", fecha=" + fechaOracle);
+            continue;
+        }
+
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+        System.out.println("[ROW_JSON] tramo " + i + " = " + rowJson);
+
+        // ========= 5) Comparación flexible por clave/valor del tramo =========
+        List<String> oks   = new ArrayList<>();
+        List<String> fails = new ArrayList<>();
+        List<String> skips = new ArrayList<>();
+
+        // Claves que no están en BD y deben omitirse
+        Set<String> omit = Set.of(
+                "OPF_numeralCambiario"   // ejemplo: no está en BD
+        );
+
+        // Recorremos todas las entradas del JSON y tomamos sólo las del tramo i
+        for (Map.Entry<String, String> e : kv.entrySet()) {
+            String k = e.getKey();
+            String v = e.getValue();
+            if (v == null || v.isBlank()) continue;
+            if (!k.endsWith(sufijo)) continue;
+            if (!k.startsWith("OPF_")) continue;
+
+            String baseKey = k.substring(0, k.length() - sufijo.length());
+            if (omit.contains(baseKey)) { skips.add(baseKey); continue; }
+
+            // normalización numérica con ceros a la izquierda y separadores
+            String normalized = normalizeForDbMatch(baseKey, v);
+
+            boolean match = containsJsonValue(rowJson, normalized);
+            String printable = baseKey + " = " + v;
+
+            if (match) oks.add(printable);
+            else       fails.add(printable);
+        }
+
+        // Logs por tramo
+        System.out.println(String.format("[RESUMEN] Bloque %d -> OK:%d  FAIL:%d", i, oks.size(), fails.size()));
+        if (!oks.isEmpty()) {
+            System.out.println("[OK] Campos encontrados:");
+            oks.forEach(s -> System.out.println("  ✓ " + s));
+        }
+        if (!fails.isEmpty()) {
+            System.out.println("[FAIL] Campos faltantes:");
+            fails.forEach(s -> System.out.println("  ✗ " + s));
+        }
+        if (!skips.isEmpty()) {
+            System.out.println("[SKIP] Claves omitidas (no se validan en BD):");
+            skips.forEach(s -> System.out.println("  · " + s));
+        }
+
+        // acumular errores del tramo
+        globalErrors.addAll(fails);
+    }
+
+    // ========= 6) Validación final global =========
+    if (!globalErrors.isEmpty()) {
+        globalErrors.forEach(s -> System.out.println(" - " + s));
+        if (failAtEnd) throw new AssertionError(
+                "Se encontraron " + globalErrors.size() + " diferencias entre XML y BD (procesados).");
+    } else {
+        System.out.println("===== PROCESADOS XML vs BD: TODO OK =====");
+    }
+}
+
+
+/** Normaliza valores problemáticos para compararlos con la fila JSON de Oracle */
+private static String normalizeForDbMatch(String baseKey, String raw) {
+    if (raw == null) return "";
+    String v = raw.trim();
+
+    // Quitar comas de miles o espacios finos
+    v = v.replaceAll("[\\u00A0\\s,]", "");
+
+    // Si es numérico con decimales tipo "000000123.00" -> "123.00"
+    if (v.matches("^[0-9]+(\\.[0-9]+)?$")) {
+        // quitar ceros a la izquierda, pero dejar un "0" si era todo ceros
+        v = v.replaceFirst("^0+(?!$)", "");
+        if (v.isEmpty()) v = "0";
+    }
+
+    // Para número de declaración, ya estamos filtrando por últimos 5 en la query;
+    // acá no hace falta más que mantener dígitos si lo llegas a imprimir.
+    if (baseKey.equals("OPF_numeroDeclaracion")) {
+        v = v.replaceAll("\\D", "");
+    }
+
+    return v;
+}
+
+
+SELECT JSON_OBJECT(
+  'NUM_DECL' VALUE FP_NUMERODECLARACION,
+  'TIPO_DOC' VALUE FP_TIPODOCUMENTOIMPORTADOR,
+  'NUM_DOC'  VALUE FP_NUMERODOCUMENTOIMPORTADOR,
+  'NOMBRE'   VALUE FP_NOMBREIMPORTADOR,
+  'MONEDA'   VALUE FP_MONEDANEGOCIACION,
+  'FECHA'    VALUE TO_CHAR(FP_FECHA,'DD-MON-YY'),
+  'VALOR_USD' VALUE FP_VALOR_TOTAL_USD
+) AS ROW_JSON
+...

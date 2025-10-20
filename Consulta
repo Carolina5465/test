@@ -1,0 +1,13 @@
+String sql = String.format(
+    "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+    "FROM BAC_FORMULARIOSPROCESADOS_XML " +
+    "WHERE FP_NOMBREARCHIVO = '%s' " +
+    "  AND TO_CHAR(FP_NUMERODECLARACION) LIKE '%%%s' " +   // %% -> %
+    "  AND TO_CHAR(FP_FECHA,'DD-MON-YY') = '%s' " +
+    "FETCH FIRST 1 ROWS ONLY",
+    nombreArchivoXml,  // %s
+    ult5,              // %s (va después del % en LIKE)
+    fechaOracle        // %s
+);
+System.out.println("[SQL] BLOQUE " + i + " -> " + sql);
+StepResult db = dbAgent.runMethod("query", new Object[]{sql});

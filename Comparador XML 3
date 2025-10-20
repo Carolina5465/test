@@ -1,0 +1,94 @@
+@And("^OracleSIT consulta y compara datos desde el json \"([^\"]+)\"$")
+public void cargandoDatosOPF(String nombreJson) throws Exception {
+    // 1) leer JSON
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreJson);
+    if (!Files.exists(rutaJson)) {
+        throw new Exception("No existe el JSON: " + rutaJson.toAbsolutePath());
+    }
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+    Map<String,String> kv = JsonUtils.parseFlatJsonToMap(json); // tu helper existente
+
+    // 2) descubrir tramos a partir de las llaves OPF_numeroDeclaracion_n (Java 8 compatible)
+    List<Integer> tramos = kv.keySet().stream()
+            .filter(k -> k.startsWith("OPF_numeroDeclaracion_"))
+            .map(k -> k.substring(k.lastIndexOf('_') + 1))
+            .filter(s -> s.matches("\\d+"))
+            .map(Integer::valueOf)
+            .sorted()
+            .distinct()
+            .collect(java.util.stream.Collectors.toList());
+    if (tramos.isEmpty()) {
+        throw new Exception("No se hallaron tramos (OPF_numeroDeclaracion_i) en el JSON.");
+    }
+
+    // 3) conexión a BD (igual que antes)
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent("OracleSIT");
+    List<String> globalErrors = new ArrayList<>();
+    boolean failIfEnd = true;
+
+    for (Integer i : tramos) {
+        // armar sufijo y valores del tramo
+        String sufijo = "_" + i;
+        String numDec = kv.get("OPF_numeroDeclaracion" + sufijo);    // ya lo tenías
+        String fechaDec = kv.get("OPF_fechaDeclaracion" + sufijo);   // yyyy-MM-dd en el JSON
+
+        // si tienes normalizaciones: últimos 5 dígitos, etc.
+        String ult5 = (numDec == null) ? "" : numDec.replaceAll("\\D",""); // solo dígitos
+        if (ult5.length() >= 5) ult5 = ult5.substring(ult5.length()-5);
+
+        // 4) query por tramo (ajusta a tu tabla/columnas)
+        String sql = String.format(
+            "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+            "FROM BAC_FORMULARIOSPROCESADOS_XML " +
+            "WHERE FP_NOMBREARCHIVO = '%s' " +
+            "AND FP_NUMERODECLARACION LIKE '%%%s' " + // últimos 5
+            "AND TO_CHAR(FP_FECHA,'DD-MON-YY') = '%s' " +
+            "FETCH FIRST 1 ROWS ONLY",
+            kv.getOrDefault("OPF_nombreXml" + sufijo, ""), // si guardas el nombre en el JSON
+            ult5,
+            DateUtils.toOracleDayMonthYear(fechaDec)       // tu helper dd-MON-yy
+        );
+
+        System.out.println(String.format("[SQL] BLOQUE %d -> %s", i, sql));
+
+        StepResult db = dbAgent.runWithResult("query", new Object[]{sql});
+        if (db == null || db.getFieldValue("ROW_JSON") == null) {
+            globalErrors.add("Bloque " + i + ": sin fila en BD para " + kv.get("OPF_nombreXml" + sufijo));
+            continue;
+        }
+
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+
+        // 5) generar pares clave/valor del tramo (OPF_*_i) y comparar como ya lo haces
+        List<String> oks = new ArrayList<>();
+        List<String> fails = new ArrayList<>();
+        List<String> skips = new ArrayList<>();
+
+        for (Map.Entry<String,String> e : kv.entrySet()) {
+            String keyWithSuffix = e.getKey();
+            if (!keyWithSuffix.endsWith(sufijo)) continue;
+
+            String value = e.getValue();
+            String basekey = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+
+            if (shouldSkipBaseKey(basekey)) { // tu lista de ignorados
+                skips.add(basekey);
+                continue;
+            }
+
+            boolean match = containsJsonValue(rowJson, value); // tu helper de comparación flexible
+            String printable = basekey + " = " + value;
+            if (match) oks.add(printable); else fails.add(printable);
+        }
+
+        // logs
+        System.out.println(String.format("[RESUMEN] Bloque %d -> OK:%d  FAIL:%d", i, oks.size(), fails.size()));
+        if (!oks.isEmpty()) { System.out.println("[OK] Campos encontrados:"); oks.forEach(s -> System.out.println("  ✓ " + s)); }
+        if (!fails.isEmpty()) { System.out.println("[FAIL] Campos faltantes:"); fails.forEach(s -> System.out.println("  ✗ " + s)); globalErrors.addAll(fails); }
+    }
+
+    // 6) si hay cualquier FAIL, rompe el escenario (como acordamos)
+    if (!globalErrors.isEmpty()) {
+        throw new AssertionError("Existen " + globalErrors.size() + " validaciones fallidas. Revisa el log.");
+    }
+}

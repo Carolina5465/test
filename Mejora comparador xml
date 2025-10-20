@@ -1,0 +1,69 @@
+public void cargandoDatosOPF_NumeroYFecha(String agentName, String nombreJson) throws Exception {
+    // 1) leer JSON
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreJson);
+    if (!Files.exists(rutaJson)) {
+        throw new Exception("No existe el JSON: " + rutaJson.toAbsolutePath());
+    }
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+    Map<String,String> kv = JsonUtils.parseFlatJsonToMap(json);
+
+    // nombre del archivo desde GlobalContext (como ya lo imprimías)
+    String nombreArchivoXML = String.valueOf(GlobalContext.get("nombreXML"));
+    if (nombreArchivoXML == null) nombreArchivoXML = "";
+    nombreArchivoXML = nombreArchivoXML.trim();
+    // escapar comillas simples para SQL
+    String nombreArchivoSQL = nombreArchivoXML.replace("'", "''");
+
+    // 2) tramos (igual que tenías)
+    List<Integer> tramos = kv.keySet().stream()
+            .filter(k -> k.startsWith("OPF_numeroDeclaracion_"))
+            .map(k -> k.substring(k.lastIndexOf('_') + 1))
+            .filter(s -> s.matches("\\d+"))
+            .map(Integer::valueOf)
+            .sorted()
+            .distinct()
+            .collect(java.util.stream.Collectors.toList());
+
+    if (tramos.isEmpty()) {
+        throw new Exception("No se hallaron tramos (OPF_numeroDeclaracion_i) en el JSON.");
+    }
+
+    Agent dbAgent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+
+    for (Integer i : tramos) {
+        String sufijo = "_" + i;
+
+        String numDec = kv.get("OPF_numeroDeclaracion" + sufijo);
+        String fechaDec = kv.get("OPF_fechaDeclaracion" + sufijo);
+
+        // últimos 5 dígitos
+        String ult5 = (numDec == null) ? "" : numDec.replaceAll("\\D", "");
+        if (ult5.length() >= 5) ult5 = ult5.substring(ult5.length() - 5);
+
+        // fecha en dd-MON-yy (usa tu helper)
+        String fechaOracle = DateUtils.toOracleDayMonthYear(fechaDec); // ej. 16-SEP-25
+
+        // DEBUG
+        System.out.println("[DEBUG] archivo=" + nombreArchivoXML + " | ult5=" + ult5 + " | fecha=" + fechaOracle);
+
+        String sql = String.format(
+            "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+            "FROM BAC_FORMULARIOSPROCESADOS_XML " +
+            "WHERE FP_NOMBREARCHIVO = '%s' " +
+            "AND FP_NUMERODECLARACION LIKE '%%%s' " +
+            "AND TO_CHAR(FP_FECHA_ARCHIVO,'DD-MON-YY') = '%s' " +  // <-- usa el nombre real de la columna
+            "FETCH FIRST 1 ROWS ONLY",
+            nombreArchivoSQL, ult5, fechaOracle
+        );
+
+        System.out.println(String.format("[SQL] BLOQUE %d -> %s", i, sql));
+
+        StepResult db = dbAgent.runWithResult("query", new Object[]{sql});
+        if (db == null || db.getFieldValue("ROW_JSON") == null) {
+            throw new Exception("Sin fila en BD para archivo=" + nombreArchivoXML + " bloque=" + i);
+        }
+
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+        // ... (sigue tu comparación OK/FAIL como ya la tienes)
+    }
+}

@@ -1,0 +1,193 @@
+/**
+ * Compara los datos del JSON (ultimo_xml_OPF.json) contra la tabla de BD por NOMBRE DE ARCHIVO y FECHA,
+ * filtrando la fila por los últimos 5 dígitos del número de declaración.
+ *
+ * - Valida únicamente los campos que estén presentes en el ROW_JSON de la consulta (los demás -> SKIP).
+ * - Para OPF_numeroDeclaracion_* compara por últimos 5 dígitos.
+ * - Si hay cualquier FAIL, lanza AssertionError al final.
+ */
+public void cargandoDatosOPF_NumeroYFecha(String agentName, String nombreJson, String varName) throws Exception {
+
+    // Acumulador global de errores del escenario
+    List<String> globalErrors = new ArrayList<>();
+
+    // 1) leer JSON
+    Path rutaJson = Paths.get(System.getProperty("user.dir"), nombreJson);
+    if (!Files.exists(rutaJson)) {
+        throw new Exception("No existe el JSON: " + rutaJson.toAbsolutePath());
+    }
+    String json = Files.readString(rutaJson, StandardCharsets.UTF_8).trim();
+    Map<String, String> kv = JsonUtils.parseJsonToMap(json); // tu helper existente (Map<String,String>)
+
+    // Nombre del archivo XML (viene del Background y ya lo guardas en contexto)
+    String nombreArchivoXML = String.valueOf(GlobalContext.get("nombreXML")).trim();
+    System.out.println("El nombre del archivo xml es: " + nombreArchivoXML);
+
+    // 2) descubrir tramos a partir de las llaves OPF_numeroDeclaracion_#
+    List<Integer> tramos = kv.keySet().stream()
+            .filter(k -> k.startsWith("OPF_numeroDeclaracion_"))
+            .map(k -> Integer.valueOf(k.substring(k.lastIndexOf('_') + 1)))
+            .distinct()
+            .sorted()
+            .collect(java.util.stream.Collectors.toList());
+
+    if (tramos.isEmpty()) {
+        throw new Exception("No se hallaron tramos (OPF_numeroDeclaracion_i) en el JSON.");
+    }
+
+    // 3) conectar al agente de BD
+    Agent dbagent = AgentsManager.getInstance().getOrCreateAgent(agentName);
+    if (dbagent == null) throw new Exception("[BD] Agent nulo para: " + agentName);
+
+    // 4) iterar por tramo
+    for (Integer i : tramos) {
+        String sufijo = "_" + i;
+
+        // valores base del tramo
+        String numDecl = kv.get("OPF_numeroDeclaracion" + sufijo);
+        String ult5    = last5Digits(numDecl); // <-- solo 5 últimos dígitos
+        String fecha   = kv.get("OPF_fechaDeclaracion"  + sufijo);
+        String fechaOracle = DateUtils.toOracleDayMonthYear(fecha); // lo vienes usando (ej: 16-SEP-25)
+
+        // === IMPORTANTE: NO CAMBIAR LOS CAMPOS DE LA CONSULTA ===
+        // Ajusta ÚNICAMENTE el nombre de la tabla si lo necesitas (aquí está como BAC_DETFORMULARIOSPROCESADOS_XML).
+        String sql =
+                "SELECT JSON_OBJECT(*) AS ROW_JSON " +
+                "FROM BAC_DETFORMULARIOSPROCESADOS_XML " +
+                String.format(
+                    "WHERE FP_NOMBREARCHIVO = '%s' " +
+                    "AND FP_NUMERODECLARACION LIKE '%%%s' " +    // últimos 5
+                    "AND TO_CHAR(FP_FECHA,'DD-MON-YY') = '%s' " +
+                    "FETCH FIRST 1 ROWS ONLY",
+                    nombreArchivoXML, ult5, fechaOracle
+                );
+
+        System.out.println(String.format("[SQL] BLOQUE %d -> %s", i, sql));
+
+        // 5) ejecutar consulta
+        StepResult db;
+        try {
+            db = dbagent.runWithResult("query", new Object[]{sql});
+        } catch (Exception ex) {
+            String msg = "[BD] Error ejecutando query bloque " + sufijo + ": " + ex.getMessage();
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        if (db == null) {
+            String msg = "[BD] Respuesta nula bloque " + sufijo;
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        String rowJson = String.valueOf(db.getFieldValue("ROW_JSON"));
+        if (rowJson == null || rowJson.isBlank() || "null".equalsIgnoreCase(rowJson)) {
+            String msg = "[BD] Sin fila en BD para archivo=" + nombreArchivoXML + " , bloque " + sufijo;
+            System.out.println(msg);
+            globalErrors.add(msg);
+            continue;
+        }
+
+        // 6) preparar listas
+        List<String> oks   = new ArrayList<>();
+        List<String> fails = new ArrayList<>();
+        List<String> skips = new ArrayList<>();
+
+        // 6.1) Conjunto de basekeys que sí existen en la fila JSON de BD (para validar SOLO esas)
+        Set<String> presentBaseKeys = kv.entrySet().stream()
+                .filter(e -> e.getKey().endsWith(sufijo))
+                .map(e -> e.getKey().substring(0, e.getKey().length() - sufijo.length()))
+                .filter(base -> rowJson.contains("\"" + base + "\"")) // aparece como nombre de campo en BD
+                .collect(java.util.stream.Collectors.toSet());
+
+        // 6.2) Comparación llave/valor
+        for (Map.Entry<String, String> e : kv.entrySet()) {
+            String keyWithSuffix = e.getKey();
+            if (!keyWithSuffix.endsWith(sufijo)) continue;
+
+            String value  = e.getValue();
+            String basekey = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+
+            // descartar claves que no se validan en BD
+            if (shouldSkipBaseKey(basekey)) { skips.add(basekey); continue; }
+
+            // si la clave no aparece en la fila de BD -> SKIP (no marcar FAIL)
+            if (!presentBaseKeys.contains(basekey)) { skips.add(basekey); continue; }
+
+            boolean match;
+            if ("OPF_numeroDeclaracion".equals(basekey)) {
+                // para número declaración comparamos por últimos 5
+                match = containsJsonValue(rowJson, last5Digits(value));
+            } else {
+                match = containsJsonValue(rowJson, value);
+            }
+
+            String printable = basekey + " = " + value;
+            if (match) oks.add(printable); else fails.add(printable);
+        }
+
+        // 7) logs del bloque
+        System.out.println(String.format("[RESUMEN] Bloque %d -> OK:%d  FAIL:%d", i, oks.size(), fails.size()));
+        if (!oks.isEmpty())   { System.out.println("[OK] Campos encontrados:");   oks.forEach(s -> System.out.println("  ✓ " + s)); }
+        if (!fails.isEmpty()) { System.out.println("[FAIL] Campos faltantes:");   fails.forEach(s -> System.out.println("  ✗ " + s)); }
+        if (!skips.isEmpty()) { System.out.println("[SKIP] Claves omitidas (no se validan en BD):"); skips.forEach(s -> System.out.println("  • " + s)); }
+
+        // acumular fails
+        globalErrors.addAll(fails);
+    }
+
+    // 8) Si hay cualquier FAIL, romper el escenario
+    if (!globalErrors.isEmpty()) {
+        String detailMessage = "Existen " + globalErrors.size() + " validaciones fallidas. Revisa el log.";
+        throw new AssertionError(detailMessage);
+    }
+}
+
+
+
+/** Últimos 5 dígitos (ignora todo lo que no sea dígito) */
+private static String last5Digits(String raw) {
+    if (raw == null) return "";
+    String digits = raw.replaceAll("\\D", "");
+    if (digits.length() <= 5) return digits;
+    return digits.substring(digits.length() - 5);
+}
+
+/** Normaliza valores para comparación flexible con el JSON de BD */
+private static String normalizeForDbMatch(String basekey, String raw) {
+    String v = (raw == null) ? "" : raw.trim();
+
+    // quitar comas de miles y espacios finos
+    v = v.replaceAll("[\\u00A0\\s,]", "");
+
+    // si es número con decimales, quita ceros a la izquierda y .00 finales
+    if (v.matches("[-+]?\\d+(?:[.]\\d+)?")) {
+        v = v.replaceFirst("^0+(?!$)", "");   // 0000123 -> 123
+        v = v.replaceFirst("(\\.0+)$", "");   // 123.00  -> 123
+    }
+
+    // para número de declaración, te quedas con últimos 5 (para imprimir/chequear si hiciera falta)
+    if ("OPF_numeroDeclaracion".equals(basekey)) {
+        v = last5Digits(v);
+    }
+    return v;
+}
+
+/** ¿Debe omitirse esta clave? agrega aquí las que no se validan en BD */
+private static boolean shouldSkipBaseKey(String basekey) {
+    // ejemplos:
+    if ("OPF_numeralCambiario".equals(basekey)) return true; // no existe en esta BD
+    return false;
+}
+
+/** ¿El JSON de BD contiene este valor (normalizado)? */
+private static boolean containsJsonValue(String rowJson, String rawValue) {
+    if (rowJson == null || rowJson.isBlank()) return false;
+    String buscar = normalizeForDbMatch("", rawValue); // sin basekey aquí
+    if (buscar.isEmpty()) return false;
+    // normalización simple del lado JSON (quitar espacios finos, comas de miles)
+    String hay = rowJson.replaceAll("[\\u00A0\\s,]", "");
+    return hay.contains(buscar);
+}

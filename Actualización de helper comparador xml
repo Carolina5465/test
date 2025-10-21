@@ -1,0 +1,57 @@
+// 6) preparar listas
+List<String> oks   = new ArrayList<>();
+List<String> fails = new ArrayList<>();
+List<String> skips = new ArrayList<>();
+
+// 6.1) Comparación llave/valor (validamos TODO salvo las claves de SKIP fijo)
+for (Map.Entry<String, String> e : kv.entrySet()) {
+    String keyWithSuffix = e.getKey();
+    if (!keyWithSuffix.endsWith(sufijo)) continue;
+
+    String value  = e.getValue();
+    String basekey = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+
+    // omitir solo las claves que no existen en esta BD
+    if (shouldSkipBaseKey(basekey)) {
+        skips.add(basekey);
+        continue;
+    }
+
+    boolean match;
+    if ("OPF_numeroDeclaracion".equals(basekey)) {
+        // número de declaración: comparar por últimos 5
+        match = containsJsonValue(rowJson, last5Digits(value));
+    } else {
+        match = containsJsonValue(rowJson, value);
+    }
+
+    String printable = basekey + " = " + value;
+    if (match) oks.add(printable); else fails.add(printable);
+}
+
+// 7) logs del bloque
+System.out.println(String.format("[RESUMEN] Bloque %d -> OK:%d  FAIL:%d", i, oks.size(), fails.size()));
+if (!oks.isEmpty())   { System.out.println("[OK] Campos encontrados:");   oks.forEach(s -> System.out.println("  ✓ " + s)); }
+if (!fails.isEmpty()) { System.out.println("[FAIL] Campos faltantes:");   fails.forEach(s -> System.out.println("  ✗ " + s)); }
+if (!skips.isEmpty()) { System.out.println("[SKIP] Claves omitidas (no se validan en BD):"); skips.forEach(s -> System.out.println("  • " + s)); }
+
+// acumular fails
+globalErrors.addAll(fails);
+
+
+
+// ==== SKIP FIJO (solo las claves que NO existen en esta BD) ====
+private static final java.util.Set<String> FIXED_SKIP_KEYS =
+        new java.util.HashSet<>(java.util.Arrays.asList(
+            // Deja esta si efectivamente no está en la BD:
+            "OPF_numeralCambiario",
+            // Las 4 que pediste omitir:
+            "OPF_tipoEntidad",
+            "OPF_tipoDocumentoImportador",
+            "OPF_nombreImportador",
+            "OPF_numeroDocumentoImportador"
+        ));
+
+private static boolean shouldSkipBaseKey(String basekey) {
+    return FIXED_SKIP_KEYS.contains(basekey);
+}

@@ -1,0 +1,34 @@
+for (Map.Entry<String,String> e : kv.entrySet()) {
+    String keyWithSuffix = e.getKey();
+    if (!keyWithSuffix.endsWith(sufijo)) continue;
+
+    String basekey = keyWithSuffix.substring(0, keyWithSuffix.length() - sufijo.length());
+    String value   = e.getValue();
+
+    if (shouldSkipBaseKey(basekey)) { 
+        skips.add(basekey); 
+        continue; 
+    }
+
+    boolean match;
+
+    if ("OPF_numeroDeclaracion".equals(basekey)) {
+        String ult5 = last5Digits(value);
+
+        // Opción A (rápida): contains sobre todo el ROW_JSON
+        // match = rowJson != null && rowJson.contains(ult5);
+
+        // Opción B (más precisa): leer el campo y comparar sufijo
+        String bdValue = extractJsonField(rowJson, "FP_NUMERODECLARACION");
+        match = bdValue != null && last5Digits(bdValue).equals(ult5);
+
+        // Debug útil
+        System.out.println("[DEBUG] OPF_numeroDeclaracion XML=" + value 
+            + " ult5=" + ult5 + " | BD=" + bdValue);
+    } else {
+        match = containsJsonValue(rowJson, value); // tu helper normal
+    }
+
+    String printable = basekey + " = " + value;
+    if (match) oks.add(printable); else fails.add(printable);
+}

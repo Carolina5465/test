@@ -1,0 +1,177 @@
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
+
+import io.cucumber.java.en.When;
+
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
+
+public class TuClaseDeSteps {
+
+    @When("^Extraigo datos del ultimo PDF en la ruta \"([^\"]+)\" con prefijo \"([^\"]+)\"$")
+    public void extraigoDatosDelUltimoPDF(String carpetaXml, String prefijo) throws Exception {
+        // 1) Validar carpeta
+        Path dir = Paths.get(carpetaXml);
+        if (!Files.isDirectory(dir)) {
+            throw new Exception("La ruta no es una carpeta válida: " + dir.toAbsolutePath());
+        }
+
+        // 2) Buscar el PDF más reciente cuyo nombre comience por el prefijo
+        Path pdf = findNewestPdf(dir, prefijo)
+                .orElseThrow(() -> new Exception(
+                        "No se encontró PDF con prefijo '" + prefijo + "' en: " + dir.toAbsolutePath()));
+
+        System.out.println("[PDF] Seleccionado: " + pdf.getFileName());
+
+        // 3) Definir salida CSV (mismo nombre que el PDF, extensión .csv)
+        Path outCsv = pdf.resolveSibling(pdf.getFileName().toString().replaceAll("(?i)\\.pdf$", ".csv"));
+
+        // 4) Parámetros de extracción (ajusta si tu cabecera cambia)
+        final String HEADER_ANCHOR = "OKBOR"; // texto que aparece en la cabecera de la tabla
+        // Si quieres forzar headers fijos en el CSV, colócalos aquí; si no, deja 'null'
+        final List<String> CSV_HEADERS = null;
+
+        // 5) Convertir el PDF a CSV
+        pdfToCsv(pdf, outCsv, HEADER_ANCHOR, CSV_HEADERS);
+
+        System.out.println("[OK] CSV generado en: " + outCsv.toAbsolutePath());
+    }
+
+    // ================== Helpers ==================
+
+    /** Encuentra el PDF más reciente en un directorio que comience por 'startsWith' (case-insensitive). */
+    private static Optional<Path> findNewestPdf(Path dir, String startsWith) throws IOException {
+        String prefix = (startsWith == null) ? "" : startsWith.toLowerCase(Locale.ROOT);
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir, "*.pdf")) {
+            return StreamSupport.stream(ds.spliterator(), false)
+                    .filter(p -> p.getFileName().toString().toLowerCase(Locale.ROOT).startsWith(prefix))
+                    .max(Comparator.comparingLong(p -> p.toFile().lastModified()));
+        }
+    }
+
+    /**
+     * Conversión PDF -> CSV sin dependencias extra (solo PDFBox).
+     * Detecta la línea de cabecera que contenga 'headerAnchor' y parte celdas por grupos de 2+ espacios.
+     */
+    private static void pdfToCsv(Path pdf, Path outCsv,
+                                 String headerAnchor,
+                                 List<String> csvHeaders) throws IOException {
+
+        // 1) Extraer texto del PDF
+        String text;
+        try (PDDocument doc = PDDocument.load(pdf.toFile())) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            stripper.setSortByPosition(true); // respetar posiciones para conservar la “columna” por espacios
+            text = stripper.getText(doc);
+        }
+
+        // 2) Normalizar saltos/espacios y dividir en líneas
+        List<String> lines = Arrays.stream(
+                        text.replace('\u00A0', ' ')      // NBSP -> espacio normal
+                            .replaceAll("[\\t\\r]", " ")
+                            .split("\\n"))
+                .map(s -> s.replaceAll(" {2,}", "  ").trim()) // colapsar espacios exagerados
+                .collect(Collectors.toList());
+
+        // 3) Localizar cabecera mediante anchor
+        int headerIdx = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).toUpperCase(Locale.ROOT)
+                    .contains(headerAnchor.toUpperCase(Locale.ROOT))) {
+                headerIdx = i;
+                break;
+            }
+        }
+        if (headerIdx < 0) {
+            throw new IOException("No se encontró la cabecera con anchor: " + headerAnchor);
+        }
+
+        // 4) Tomar filas hasta “corte”
+        List<String[]> rows = new ArrayList<>();
+        String headerLine = lines.get(headerIdx);
+        String[] headerCells = splitCells(headerLine);
+
+        int i = headerIdx + 1;
+        while (i < lines.size()) {
+            String ln = lines.get(i).trim();
+            if (ln.isEmpty()) break;
+            if (ln.startsWith("Página") || ln.startsWith("Exportar") || ln.startsWith("Cerrar")) break;
+
+            String[] cells = splitCells(ln);
+            if (cells.length <= 1) { i++; continue; } // descartar basura
+
+            rows.add(cells);
+            i++;
+        }
+        if (rows.isEmpty()) {
+            throw new IOException("No se encontraron filas debajo de la cabecera.");
+        }
+
+        // 5) Headers y normalización de ancho
+        List<String> headers = (csvHeaders != null && !csvHeaders.isEmpty())
+                ? csvHeaders
+                : Arrays.asList(headerCells);
+
+        int maxCols = headers.size();
+        if (csvHeaders == null || csvHeaders.isEmpty()) {
+            maxCols = Math.max(maxCols, rows.stream().mapToInt(r -> r.length).max().orElse(headerCells.length));
+            headers = Arrays.asList(pad(headerCells, maxCols));
+        }
+
+        List<String[]> normalized = rows.stream()
+                .map(r -> pad(r, maxCols))
+                .map(TuClaseDeSteps::cleanRow)
+                .collect(Collectors.toList());
+
+        // 6) Escribir CSV
+        try (BufferedWriter bw = Files.newBufferedWriter(outCsv, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            bw.write(String.join(",", escapeCsv(headers)));
+            bw.newLine();
+            for (String[] r : normalized) {
+                bw.write(String.join(",", escapeCsv(Arrays.asList(r))));
+                bw.newLine();
+            }
+        }
+    }
+
+    /** Divide una línea en celdas por grupos de 2+ espacios. */
+    private static String[] splitCells(String line) {
+        return Arrays.stream(line.trim().split("\\s{2,}"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toArray(String[]::new);
+    }
+
+    /** Completa/recorta una fila al ancho deseado. */
+    private static String[] pad(String[] row, int width) {
+        String[] out = new String[width];
+        for (int i = 0; i < width; i++) out[i] = (i < row.length) ? row[i] : "";
+        return out;
+    }
+
+    /** Limpieza ligera por celda. */
+    private static String[] cleanRow(String[] row) {
+        for (int i = 0; i < row.length; i++) {
+            row[i] = row[i].replaceAll("\\s{2,}", " ").trim();
+        }
+        return row;
+    }
+
+    /** Escapar CSV (doble comillas donde corresponde). */
+    private static List<String> escapeCsv(List<String> cells) {
+        return cells.stream().map(TuClaseDeSteps::csvEscape).collect(Collectors.toList());
+    }
+
+    private static String csvEscape(String s) {
+        if (s == null) return "";
+        boolean need = s.contains(",") || s.contains("\"") || s.contains("\n");
+        String v = s.replace("\"", "\"\"");
+        return need ? "\"" + v + "\"" : v;
+        }
+}

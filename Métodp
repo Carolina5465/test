@@ -1,0 +1,43 @@
+@When("^Encuentro el ultimo PDF en la ruta \"([^\"]+)\" con prefijo \"([^\"]+)\" y lo guardo en (\\S+)$")
+public void encuentroUltimoPdf(String rutaCarpeta, String prefijo, String varName) throws Exception {
+    // 1) Validar carpeta
+    Path dir = Paths.get(rutaCarpeta);
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("Carpeta no válida: " + dir.toAbsolutePath());
+    }
+
+    // 2) Hallar PDF más reciente (opcionalmente por prefijo)
+    Path pdf = findNewestFile(dir, prefijo, ".pdf")
+            .orElseThrow(() -> new Exception(
+                    "No se encontró PDF con prefijo '" + prefijo + "' en: " + dir.toAbsolutePath()));
+
+    System.out.println("[PDF] Más reciente: " + pdf.getFileName() +
+            " | modTime=" + Files.getLastModifiedTime(pdf));
+
+    // 3) (Opcional) Publicar en contexto para el siguiente paso
+    GlobalContext.getInstance().setVariable(varName, pdf.toAbsolutePath().toString());
+    System.out.println("[CTX] Guardado en (" + varName + "): " + pdf.toAbsolutePath());
+}
+
+
+
+private static Optional<Path> findNewestFile(Path dir, String startsWith, String requiredExt) throws IOException {
+    final String ext = requiredExt == null ? "" : requiredExt.toLowerCase(Locale.ROOT);
+    final String prefix = startsWith == null ? "" : startsWith.toLowerCase(Locale.ROOT);
+
+    try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir, "*")) {
+        return StreamSupport.stream(ds.spliterator(), false)
+                .filter(Files::isRegularFile)
+                .filter(p -> {
+                    String name = p.getFileName().toString();
+                    String lower = name.toLowerCase(Locale.ROOT);
+                    boolean okExt = ext.isEmpty() || lower.endsWith(ext);
+                    boolean okPrefix = prefix.isEmpty() || lower.startsWith(prefix);
+                    return okExt && okPrefix;
+                })
+                .max(Comparator.comparingLong(p -> {
+                    try { return Files.getLastModifiedTime(p).toMillis(); }
+                    catch (IOException e) { return Long.MIN_VALUE; }
+                }));
+    }
+}

@@ -1,0 +1,119 @@
+@When("^Extraigo datos del PDF guardado en (\\S+) y creo el JSON \"([^\"]+)\"$")
+public void extraigoDatosDePdfAGuardoJson(String pdfPathVar, String outJsonName) throws Exception {
+    // 0) Resolver insumos/salidas
+    String pdfPathStr = String.valueOf(GlobalContext.getInstance().getVariable(pdfPathVar));
+    if (pdfPathStr == null || pdfPathStr.isBlank())
+        throw new Exception("La variable de contexto " + pdfPathVar + " no tiene ruta de PDF.");
+
+    Path pdfPath = Paths.get(pdfPathStr);
+    if (!Files.isRegularFile(pdfPath))
+        throw new Exception("El PDF no existe: " + pdfPath.toAbsolutePath());
+
+    Path outJson = Paths.get(System.getProperty("user.dir")).resolve(outJsonName);
+
+    // 1) Leer texto del PDF con PDFBox
+    String rawText = readPdfText(pdfPath);            // -> helper de abajo
+    if (rawText == null || rawText.isBlank())
+        throw new Exception("No se pudo extraer texto del PDF: " + pdfPath.getFileName());
+
+    // 2) Normalizar texto (quita dobles espacios, etc.)
+    String text = rawText.replace("\r", "\n")
+                         .replaceAll("[\\t\\u00A0]+", " ")
+                         .replaceAll(" +", " ")
+                         .replaceAll("\\n{2,}", "\n")
+                         .trim();
+
+    // 3) Extraer campos con regex (ajusta los patrones a tu layout de PDF)
+    Map<String, String> data = new LinkedHashMap<>();
+    data.put("archivo", pdfPath.getFileName().toString());
+    data.put("modificado", Files.getLastModifiedTime(pdfPath).toString());
+    data.put("tamanoBytes", String.valueOf(Files.size(pdfPath)));
+
+    // Campos de tu ejemplo (ponemos varios patrones por si cambian etiquetas)
+    putIfFound(data, "FechaIngReso", matchFirst(text,
+            "(?i)Fecha\\s*(de\\s*)?ingreso\\s*[:\\-]?\\s*([0-3]?\\d[\\/-][01]?\\d[\\/-]\\d{2,4})",
+            "(?i)Fecha\\s*[:\\-]?\\s*([0-3]?\\d[\\/-][01]?\\d[\\/-]\\d{2,4})"));
+
+    putIfFound(data, "Numeral15", matchFirst(text,
+            "(?i)Numeral\\s*15\\s*[:\\-]?\\s*(\\d+)",
+            "(?i)Numeral\\s*:\\s*(\\d+)"));
+
+    putIfFound(data, "NomDeudorAcreedor", matchFirst(text,
+            "(?i)(Deudor|Acreedor)\\s*[:\\-]?\\s*([\\p{L}\\p{M} .,'-]{3,})"));
+
+    putIfFound(data, "NumPrestamo", matchFirst(text,
+            "(?i)(N[uú]m(?:ero)?\\s*de\\s*)?Pr[eé]stamo\\s*[:\\-]?\\s*(\\d{3,})"));
+
+    putIfFound(data, "NumIdentifRes", matchFirst(text,
+            "(?i)(N[uú]mero\\s*de\\s*)?Identificaci[oó]n(?:\\s*Res)?\\s*[:\\-]?\\s*([0-9A-Za-z.-]{5,})"));
+
+    putIfFound(data, "NumeroOperacionDealer", matchFirst(text,
+            "(?i)Operaci[oó]n\\s*Dealer\\s*[:\\-]?\\s*([0-9]{3,})"));
+
+    putIfFound(data, "NumeroOperacionUFN", matchFirst(text,
+            "(?i)Operaci[oó]n\\s*UF[N|I]\\s*[:\\-]?\\s*([0-9]{3,})"));
+
+    // BONUS: últimos 5 del número de declaración si aparece en el PDF
+    putIfFound(data, "numeroDeclaracion_u5", matchFirst(text,
+            "(?i)N[uú]mero\\s*de\\s*Declaraci[oó]n\\s*[:\\-]?\\s*(\\d{5,})"), v -> {
+        if (v != null && v.length() >= 5) return v.substring(v.length() - 5);
+        return v;
+    });
+
+    // 4) Opcional: guarda también el texto completo para debugging (útil al afinar regex)
+    // data.put("_rawText", text); // descomenta si lo quieres
+
+    // 5) Escribir JSON
+    String json = new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson(data);
+    Files.writeString(outJson, json, StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+    System.out.println("[OK] JSON generado en: " + outJson.toAbsolutePath());
+}
+
+
+// === PDF ===
+private static String readPdfText(Path pdfPath) throws Exception {
+    // Requiere org.apache.pdfbox:pdfbox
+    try (org.apache.pdfbox.pdmodel.PDDocument doc =
+                 org.apache.pdfbox.pdmodel.PDDocument.load(pdfPath.toFile())) {
+        org.apache.pdfbox.text.PDFTextStripper stripper =
+                new org.apache.pdfbox.text.PDFTextStripper();
+        stripper.setSortByPosition(true);
+        stripper.setStartPage(1);
+        stripper.setEndPage(doc.getNumberOfPages());
+        return stripper.getText(doc);
+    } catch (NoClassDefFoundError e) {
+        throw new Exception("PDFBox no está disponible en el classpath. Agrega la dependencia pdfbox.", e);
+    }
+}
+
+// === Regex utils ===
+private static String matchFirst(String text, String... patterns) {
+    for (String p : patterns) {
+        Matcher m = Pattern.compile(p).matcher(text);
+        if (m.find()) {
+            // usa el último grupo si hay más de uno; si no, el 1
+            int g = m.groupCount() >= 2 ? 2 : 1;
+            String val = m.group(g);
+            if (val != null && !val.isBlank()) return val.trim();
+        }
+    }
+    return null;
+}
+
+private static void putIfFound(Map<String, String> map, String key, String value) {
+    if (value != null && !value.isBlank()) map.put(key, value.trim());
+}
+
+// Versión con post-procesamiento
+private static void putIfFound(Map<String, String> map, String key, String value,
+                               java.util.function.Function<String,String> post) {
+    if (value != null && !value.isBlank()) map.put(key, post.apply(value.trim()));
+}
+
+// Overload para usar con lambda corta arriba
+private static void putIfFound(Map<String, String> map, String key, String value,
+                               java.util.function.UnaryOperator<String> post) {
+    if (value != null && !value.isBlank()) map.put(key, post.apply(value.trim()));
+}

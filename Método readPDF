@@ -1,0 +1,22 @@
+// === PDF ===
+private static String readPdfText(Path pdfPath) throws Exception {
+    StringBuilder sb = new StringBuilder();
+    try (com.itextpdf.kernel.pdf.PdfReader reader = new com.itextpdf.kernel.pdf.PdfReader(pdfPath.toFile());
+         com.itextpdf.kernel.pdf.PdfDocument pdfDoc = new com.itextpdf.kernel.pdf.PdfDocument(reader)) {
+
+        int totalPages = pdfDoc.getNumberOfPages();
+        for (int i = 1; i <= totalPages; i++) {
+            com.itextpdf.kernel.pdf.canvas.parser.PdfTextExtractor extractor =
+                    new com.itextpdf.kernel.pdf.canvas.parser.PdfTextExtractor(pdfDoc.getPage(i));
+            sb.append(extractor.getTextFromPage(i)).append("\n");
+        }
+    } catch (Exception e) {
+        throw new Exception("Error al leer el texto del PDF con iText7: " + e.getMessage(), e);
+    }
+    return sb.toString();
+}
+
+
+import com.itextpdf.kernel.pdf.PdfDocument;
+import com.itextpdf.kernel.pdf.PdfReader;
+import com.itextpdf.kernel.pdf.canvas.parser.PdfTextExtractor;

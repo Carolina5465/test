@@ -1,0 +1,98 @@
+@When("^Valido nombres de PDFs generados en ruta \"([^\"]+)\" y los comparo con numeros de declaraciones almacenados$")
+public void validoNombresPDFs(String carpetaPdfs) throws Exception {
+    // 1) Cargar números desde el archivo en la raíz del proyecto
+    Path baseDir = Paths.get(System.getProperty("user.dir"));
+    Path numerosFile = baseDir.resolve("numeros_formularios_masivos.txt");
+    if (!Files.isRegularFile(numerosFile)) {
+        throw new Exception("No existe el archivo con números: " + numerosFile.toAbsolutePath());
+    }
+
+    List<String> numeros = Files.readAllLines(numerosFile, StandardCharsets.UTF_8)
+            .stream()
+            .map(s -> s.replace("\uFEFF", "").trim())
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+
+    if (numeros.isEmpty()) {
+        throw new Exception("El archivo de números está vacío: " + numerosFile.toAbsolutePath());
+    }
+
+    System.out.println("[INFO] Cantidad de números esperados: " + numeros.size());
+    System.out.println("[INFO] Ejemplos: " + numeros.stream().limit(5).collect(Collectors.toList()));
+
+    // 2) Resolver carpeta y listar PDFs
+    Path dir = Paths.get(carpetaPdfs); // soporta C:\... y \\server\share\...
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("Ruta no válida (no es carpeta): " + dir.toAbsolutePath());
+    }
+
+    List<Path> pdfs;
+    try (Stream<Path> st = Files.list(dir)) {
+        pdfs = st.filter(Files::isRegularFile)
+                 .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".pdf"))
+                 .collect(Collectors.toList());
+    }
+
+    if (pdfs.isEmpty()) {
+        throw new Exception("No se encontraron PDFs en: " + dir.toAbsolutePath());
+    }
+
+    // 3) Hacer un índice por nombre (minúsculas para comparación)
+    List<String> pdfNames = pdfs.stream()
+            .map(p -> p.getFileName().toString())
+            .collect(Collectors.toList());
+
+    List<String> pdfNamesLower = pdfNames.stream()
+            .map(String::toLowerCase)
+            .collect(Collectors.toList());
+
+    System.out.println("[INFO] PDFs encontrados (" + pdfNames.size() + "):");
+    pdfNames.forEach(n -> System.out.println("   - " + n));
+
+    // 4) Validar: cada número debe aparecer en el nombre de algún PDF
+    List<String> faltantes = new ArrayList<>();
+    Map<String, String> matchDeNumero = new LinkedHashMap<>();
+
+    for (String numero : numeros) {
+        String nlow = numero.toLowerCase();
+        int idx = -1;
+        for (int i = 0; i < pdfNamesLower.size(); i++) {
+            if (pdfNamesLower.get(i).contains(nlow)) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            faltantes.add(numero);
+        } else {
+            matchDeNumero.put(numero, pdfNames.get(idx));
+        }
+    }
+
+    // 5) (Opcional) Encontrar PDFs "sospechosos" que no matchean ningún número
+    Set<String> usados = new HashSet<>(matchDeNumero.values());
+    List<String> sobrantes = pdfNames.stream()
+            .filter(n -> !usados.contains(n))
+            .collect(Collectors.toList());
+
+    // 6) Reporte
+    System.out.println("========== RESUMEN VALIDACIÓN PDF ==========");
+    System.out.println("[OK] Coincidencias: " + matchDeNumero.size() + "/" + numeros.size());
+    matchDeNumero.forEach((num, file) ->
+            System.out.println("   ✓ número " + num + " -> " + file));
+
+    if (!faltantes.isEmpty()) {
+        System.out.println("[FALTAN] No se encontró PDF para " + faltantes.size() + " números:");
+        faltantes.forEach(n -> System.out.println("   ✗ " + n));
+    }
+    if (!sobrantes.isEmpty()) {
+        System.out.println("[SOBRAN] PDFs que no matchean ningún número del listado:");
+        sobrantes.forEach(n -> System.out.println("   • " + n));
+    }
+    System.out.println("============================================");
+
+    // 7) Regla de éxito
+    if (!faltantes.isEmpty()) {
+        throw new Exception("Validación fallida: faltan PDFs para algunos números (ver log).");
+    }
+}

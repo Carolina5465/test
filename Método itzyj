@@ -1,0 +1,79 @@
+@When("^Valido nombres de PDFs generados en ruta \"([^\"]+)\" y los comparo con numeros de declaraciones almacenados$")
+public void validoNombres_PDFs_simple(String carpetaPdfs) throws Exception {
+
+    // === 0) Cargar números
+    Path baseDir = Paths.get(System.getProperty("user.dir"));
+    Path numerosTxt = baseDir.resolve("numeros_formularios_masivos.txt");
+    if (!Files.exists(numerosTxt)) throw new Exception("No existe: " + numerosTxt.toAbsolutePath());
+    List<String> numeros = Files.readAllLines(numerosTxt, StandardCharsets.UTF_8).stream()
+            .map(s -> s.replace("\uFEFF","").trim())
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+    if (numeros.isEmpty()) throw new Exception("El archivo de números está vacío.");
+
+    Path dir = Paths.get(carpetaPdfs);
+    if (!Files.isDirectory(dir)) throw new Exception("Ruta no válida (no es carpeta): " + dir.toAbsolutePath());
+
+    // === 1) Quick refresh de la carpeta (5 re-listados, 1s de pausa)
+    final int MAX_ATTEMPTS = 5;
+    final long PAUSE_MS = 1000;
+
+    List<Path> pdfs = Collections.emptyList();
+    int attempt = 0;
+    int lastCount = -1;
+
+    while (attempt < MAX_ATTEMPTS) {
+        attempt++;
+
+        try (Stream<Path> st = Files.walk(dir)) {
+            pdfs = st.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".pdf"))
+                    .sorted((a, b) -> { // reciente → antiguo
+                        try {
+                            return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a));
+                        } catch (IOException e) { return 0; }
+                    })
+                    .collect(Collectors.toList());
+        }
+
+        // si el conteo aumentó, damos otra vuelta; si no cambió, paramos
+        if (pdfs.size() == lastCount) break;
+        lastCount = pdfs.size();
+
+        // pequeña pausa para dar tiempo a que el SO “publique” los nuevos archivos
+        Thread.sleep(PAUSE_MS);
+    }
+
+    // === 2) Matcheo por contains("0_"+numero) (elige el más reciente gracias al sort)
+    Map<String, Path> matchPorNumero = new LinkedHashMap<>();
+    Set<Path> usados = new HashSet<>();
+    for (String numero : numeros) {
+        String needle = ("0_" + numero).toLowerCase();
+        Path hit = null;
+        for (Path p : pdfs) {
+            if (usados.contains(p)) continue;
+            String name = p.getFileName().toString().toLowerCase();
+            if (name.contains(needle)) { hit = p; break; }
+        }
+        if (hit != null) {
+            matchPorNumero.put(numero, hit);
+            usados.add(hit);
+        }
+    }
+
+    // === 3) Reporte
+    List<String> faltantes = numeros.stream()
+            .filter(n -> !matchPorNumero.containsKey(n))
+            .collect(Collectors.toList());
+
+    System.out.println("\n===== RESUMEN VALIDACIÓN PDF (quick refresh) =====");
+    System.out.println("[OK] Coincidencias: " + matchPorNumero.size() + "/" + numeros.size());
+    matchPorNumero.forEach((n, p) -> System.out.println("  ✔ " + n + " -> " + p.getFileName()));
+    if (!faltantes.isEmpty()) {
+        System.out.println("\n[FALTAN] No se encontró PDF para:");
+        faltantes.forEach(n -> System.out.println("  ✖ " + n + " (contains: 0_" + n + ")"));
+        System.out.println("===============================================\n");
+        throw new Exception("Hay PDFs faltantes: " + faltantes);
+    }
+    System.out.println("===============================================\n");
+}

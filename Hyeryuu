@@ -1,0 +1,128 @@
+@When("^Valido nombres de PDFs generados en ruta \"([^\"]+)\" y los comparo con numeros de declaraciones almacenados$")
+public void validoNombres_PDFs_simple(String carpetaPdfs) throws Exception {
+    // === 0) Números
+    Path baseDir = Paths.get(System.getProperty("user.dir"));
+    Path numerosTxt = baseDir.resolve("numeros_formularios_masivos.txt");
+    if (!Files.exists(numerosTxt)) throw new Exception("No existe: " + numerosTxt.toAbsolutePath());
+    List<String> numeros = Files.readAllLines(numerosTxt, StandardCharsets.UTF_8).stream()
+            .map(s -> s.replace("\uFEFF","").trim())
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+    if (numeros.isEmpty()) throw new Exception("El archivo de números está vacío.");
+
+    Path dir = Paths.get(carpetaPdfs);
+    if (!Files.isDirectory(dir)) throw new Exception("Ruta no válida (no es carpeta): " + dir.toAbsolutePath());
+
+    // === 1) Intentos de "refresh" hasta encontrar todo o estabilizar
+    final int MAX_TRIES = 30;      // ~30s
+    final long SLEEP_MS = 1000L;
+
+    Map<String, Path> asignados = new LinkedHashMap<>();
+    Set<String> faltantes = new LinkedHashSet<>(numeros);
+
+    for (int tryIdx = 1; tryIdx <= MAX_TRIES && !faltantes.isEmpty(); tryIdx++) {
+
+        // A) Enumeración "limpia" con DirectoryStream (nuevo handle cada vez)
+        List<Path> pdfs = listPdfsWithDirectoryStream(dir);
+
+        // Fallback: si no apareció nada nuevo, forzamos un "dir" del sistema (como Explorer)
+        if (pdfs.isEmpty() || !matchAny(pdfs, faltantes)) {
+            List<Path> byCmd = listPdfsWithCmd(dir);
+            if (!byCmd.isEmpty()) pdfs = byCmd;
+        }
+
+        // Ordenar reciente → antiguo
+        pdfs.sort((a, b) -> {
+            try {
+                return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a));
+            } catch (IOException e) { return 0; }
+        });
+
+        // B) Matcheo por contains("0_"+numero), sin reutilizar el mismo archivo
+        Set<Path> usados = new HashSet<>(asignados.values());
+        for (Iterator<String> it = faltantes.iterator(); it.hasNext();) {
+            String numero = it.next();
+            String needle = ("0_" + numero).toLowerCase();
+            Path hit = null;
+            for (Path p : pdfs) {
+                if (usados.contains(p)) continue;
+                String name = p.getFileName().toString().toLowerCase();
+                if (name.contains(needle)) { hit = p; break; }
+            }
+            if (hit != null) {
+                asignados.put(numero, hit);
+                usados.add(hit);
+                it.remove();
+            }
+        }
+
+        if (!faltantes.isEmpty()) {
+            // Log corto de lo que ve el intento actual (primeros 10 nombres)
+            System.out.println(String.format(
+                    "[REFRESH %02d] Faltan %d. Vistos: %s",
+                    tryIdx, faltantes.size(),
+                    pdfs.stream().limit(10).map(p -> p.getFileName().toString())
+                            .collect(Collectors.joining(" | "))));
+            Thread.sleep(SLEEP_MS);
+        }
+    }
+
+    // === 2) Reporte final
+    System.out.println("\n===== RESUMEN VALIDACIÓN PDF =====");
+    System.out.println("[OK] Coincidencias: " + asignados.size() + "/" + numeros.size());
+    asignados.forEach((n, p) -> System.out.println("  ✔ " + n + " -> " + p.getFileName()));
+    if (!faltantes.isEmpty()) {
+        System.out.println("\n[FALTAN] No se encontró PDF para:");
+        faltantes.forEach(n -> System.out.println("  ✖ " + n + " (contains: 0_" + n + ")"));
+        System.out.println("=================================\n");
+        throw new Exception("Hay PDFs faltantes: " + faltantes);
+    }
+    System.out.println("=================================\n");
+}
+
+// === Helpers ===
+
+// Re-lee la carpeta con un DirectoryStream NUEVO (evita caché de NIO/SMB)
+private static List<Path> listPdfsWithDirectoryStream(Path dir) throws IOException {
+    List<Path> out = new ArrayList<>();
+    try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir, "*.pdf")) {
+        for (Path p : ds) {
+            if (Files.isRegularFile(p)) out.add(p);
+        }
+    }
+    return out;
+}
+
+// Fuerza al SO (Windows) a enumerar la carpeta como hace Explorer.
+// Útil cuando el share SMB tarda en “publicar” archivos recién creados.
+private static List<Path> listPdfsWithCmd(Path dir) {
+    List<Path> out = new ArrayList<>();
+    try {
+        String pattern = "*.pdf";
+        Process p = new ProcessBuilder("cmd", "/c", "dir", "/b", "/a:-d", pattern)
+                .directory(dir.toFile())
+                .redirectErrorStream(true)
+                .start();
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream(), Charset.defaultCharset()))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (!line.trim().isEmpty()) out.add(dir.resolve(line.trim()));
+            }
+        }
+        p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+    } catch (Exception ignored) { }
+    return out;
+}
+
+// ¿Alguno de los nombres contiene algún “0_numero” pendiente?
+private static boolean matchAny(List<Path> pdfs, Set<String> faltantes) {
+    if (pdfs.isEmpty() || faltantes.isEmpty()) return false;
+    Set<String> needles = faltantes.stream()
+            .map(n -> ("0_" + n).toLowerCase())
+            .collect(Collectors.toSet());
+    for (Path p : pdfs) {
+        String name = p.getFileName().toString().toLowerCase();
+        for (String nd : needles) if (name.contains(nd)) return true;
+    }
+    return false;
+}

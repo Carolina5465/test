@@ -1,0 +1,89 @@
+@When("^Valido nombres de PDFs generados en ruta \"([^\"]+)\" y los comparo con numeros de declaraciones almacenados con timeout (\\d+)s$")
+public void validoNombres_PDFs_conRefresh(String carpetaPdfs, int timeoutSeconds) throws Exception {
+
+    // 0) Cargar números
+    Path baseDir = Paths.get(System.getProperty("user.dir"));
+    Path numerosTxt = baseDir.resolve("numeros_formularios_masivos.txt");
+    if (!Files.exists(numerosTxt)) throw new Exception("No existe: " + numerosTxt.toAbsolutePath());
+    List<String> numeros = Files.readAllLines(numerosTxt, StandardCharsets.UTF_8).stream()
+            .map(s -> s.replace("\uFEFF","").trim())
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+    if (numeros.isEmpty()) throw new Exception("El archivo de números está vacío.");
+
+    Path dir = Paths.get(carpetaPdfs);
+    if (!Files.isDirectory(dir)) throw new Exception("Ruta no válida (no es carpeta): " + dir.toAbsolutePath());
+
+    // 1) Loop de refresco
+    Instant start = Instant.now();
+    Map<String, Path> matchPorNumero = new LinkedHashMap<>();
+    Set<Path> usados = new HashSet<>();
+
+    while (Duration.between(start, Instant.now()).getSeconds() <= timeoutSeconds) {
+
+        // 1.1) Re-listar PDFs (esto "refresca")
+        List<Path> pdfs;
+        try (Stream<Path> st = Files.walk(dir)) {
+            pdfs = st.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".pdf"))
+                    .sorted((a, b) -> { // reciente → antiguo
+                        try {
+                            return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a));
+                        } catch (IOException e) { return 0; }
+                    })
+                    .collect(Collectors.toList());
+        }
+
+        if (pdfs.isEmpty()) {
+            Thread.sleep(1000);
+            continue;
+        }
+
+        // 1.2) Intentar matchear los que falten
+        for (String numero : numeros) {
+            if (matchPorNumero.containsKey(numero)) continue; // ya encontrado en un ciclo previo
+            String needle = ("0_" + numero).toLowerCase();
+
+            Path hit = null;
+            for (Path p : pdfs) {
+                if (usados.contains(p)) continue;
+                String name = p.getFileName().toString().toLowerCase();
+                if (name.contains(needle)) {
+                    hit = p; // como está ordenado, el primero es el más reciente
+                    break;
+                }
+            }
+            if (hit != null) {
+                matchPorNumero.put(numero, hit);
+                usados.add(hit);
+            }
+        }
+
+        // 1.3) ¿ya encontramos todos?
+        if (matchPorNumero.size() == numeros.size()) break;
+
+        // 1.4) Aún faltan; esperar y reintentar
+        Thread.sleep(1000);
+    }
+
+    // 2) Reporte
+    List<String> faltantes = numeros.stream()
+            .filter(n -> !matchPorNumero.containsKey(n))
+            .collect(Collectors.toList());
+
+    System.out.println("\n===== RESUMEN VALIDACIÓN PDF (con refresh) =====");
+    System.out.println("[OK] Coincidencias: " + matchPorNumero.size() + "/" + numeros.size());
+    matchPorNumero.forEach((n, p) -> System.out.println("  ✔ " + n + " -> " + p.getFileName()));
+
+    if (!faltantes.isEmpty()) {
+        System.out.println("\n[FALTAN] No se encontró PDF para: ");
+        faltantes.forEach(n -> System.out.println("  ✖ " + n + " (buscado como contains: 0_" + n + ")"));
+        System.out.println("===============================================\n");
+        throw new Exception("Hay PDFs faltantes tras " + timeoutSeconds + "s: " + faltantes);
+    }
+
+    System.out.println("===============================================\n");
+}
+
+
+And Valido nombres de PDFs generados en ruta "\\10.105.125.173\Data_share\BACA\GeneradorPdfs\JF4744_20251023" y los comparo con numeros de declaraciones almacenados con timeout 60s

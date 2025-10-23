@@ -1,0 +1,23 @@
+private void appendNumeroMasivo(String mensaje) throws Exception {
+    if (mensaje == null || mensaje.isEmpty()) {
+        throw new Exception("El mensaje recibido está vacío o es nulo");
+    }
+
+    // Buscar el bloque de 5 dígitos en el mensaje
+    Matcher m = Pattern.compile("\\b\\d{5}\\b").matcher(mensaje);
+    if (!m.find()) {
+        throw new Exception("No se encontró número de 5 dígitos en: " + mensaje);
+    }
+
+    String numero = m.group(); // Ejemplo: "55424"
+
+    Files.writeString(
+        MASIVOS_PATH,
+        numero + System.lineSeparator(),
+        StandardCharsets.UTF_8,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.APPEND
+    );
+
+    System.out.println("[APPEND] Agregado número a masivos: " + numero);
+}

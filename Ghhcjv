@@ -1,0 +1,36 @@
+// Fallback: forzar refresco usando PowerShell (UNC friendly)
+private static List<Path> listPdfsWithPowerShell(Path dir) {
+    List<Path> out = new ArrayList<>();
+    try {
+        // Nota: -LiteralPath evita interpretar caracteres especiales.
+        // Devolvemos solo nombres; luego resolvemos a Paths.
+        String ps = "$p='" + dir.toString().replace("\\", "\\\\") + "';"
+                  + "Get-ChildItem -LiteralPath $p -File -Filter *.pdf "
+                  + "| Select-Object -ExpandProperty Name";
+        Process p = new ProcessBuilder("powershell", "-NoProfile", "-Command", ps)
+                .redirectErrorStream(true)
+                .start();
+
+        try (BufferedReader br = new BufferedReader(
+                new InputStreamReader(p.getInputStream(), Charset.defaultCharset()))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String name = line.trim();
+                if (!name.isEmpty()) out.add(dir.resolve(name));
+            }
+        }
+        p.waitFor(8, java.util.concurrent.TimeUnit.SECONDS);
+    } catch (Exception ignored) {}
+    return out;
+}
+
+
+// ...
+List<Path> pdfs = listPdfsWithDirectoryStream(dir);
+
+// Si no vemos nada nuevo, forzamos refresco con PowerShell (soporta UNC)
+if (pdfs.isEmpty() || !matchAny(pdfs, faltantes)) {
+    List<Path> byPs = listPdfsWithPowerShell(dir);
+    if (!byPs.isEmpty()) pdfs = byPs;
+}
+// ...

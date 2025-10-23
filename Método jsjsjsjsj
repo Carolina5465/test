@@ -1,0 +1,76 @@
+import java.nio.file.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.stream.Collectors;
+
+public void validoNombresPDFs_simple(String carpetaPdfs) throws Exception {
+    // 1) Cargar números desde el .txt en la raíz del proyecto
+    Path baseDir   = Paths.get(System.getProperty("user.dir"));
+    Path numerosTx = baseDir.resolve("numeros_formularios_masivos.txt");
+
+    if (!Files.exists(numerosTx)) {
+        throw new Exception("No existe numeros_formularios_masivos.txt en: " + numerosTx.toAbsolutePath());
+    }
+
+    List<String> numeros = Files.readAllLines(numerosTx, StandardCharsets.UTF_8).stream()
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+
+    if (numeros.isEmpty()) {
+        System.out.println("[INFO] El archivo de números está vacío. Nada que validar.");
+        return;
+    }
+
+    // 2) Omitir el último número (para evitar el caso que aún no aparece en la carpeta)
+    String ultimoOmitido = numeros.get(numeros.size() - 1);
+    numeros = new ArrayList<>(numeros.subList(0, numeros.size() - 1));
+    System.out.printf("[SKIP] Ignorando último número del .txt: %s%n", ultimoOmitido);
+
+    if (numeros.isEmpty()) {
+        System.out.println("[INFO] No hay números por validar luego de omitir el último.");
+        return;
+    }
+
+    // 3) Preparar carpeta y listar PDFs UNA sola vez (rápido)
+    Path dir = Paths.get(carpetaPdfs); // Soporta UNC: "\\\\10.105.125.173\\Data_share\\..."
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("Ruta no válida (no es carpeta): " + dir.toAbsolutePath());
+    }
+
+    // Nombres de archivos PDF (lowercase) para búsqueda rápida por "contains"
+    Set<String> pdfNames = Files.list(dir)
+            .filter(p -> Files.isRegularFile(p))
+            .map(p -> p.getFileName().toString())
+            .filter(n -> n.toLowerCase(Locale.ROOT).endsWith(".pdf"))
+            .map(n -> n.toLowerCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+
+    // 4) Validar: ¿algún nombre de PDF contiene el número?
+    List<String> faltantes = new ArrayList<>();
+    Map<String, String> asignados = new LinkedHashMap<>();
+
+    for (String numero : numeros) {
+        final String needle = numero.toLowerCase(Locale.ROOT);
+        String hit = pdfNames.stream()
+                .filter(n -> n.contains(needle))
+                .findFirst()
+                .orElse(null);
+
+        if (hit == null) {
+            faltantes.add(numero);
+        } else {
+            asignados.put(numero, hit);
+        }
+    }
+
+    // 5) Resumen
+    System.out.println("\n===== RESUMEN VALIDACIÓN PDF =====");
+    System.out.printf("[OK] Coincidencias: %d/%d%n", asignados.size(), numeros.size());
+    asignados.forEach((k, v) -> System.out.println("  ✓ " + k + "  ->  " + v));
+    if (!faltantes.isEmpty()) {
+        System.out.println("[FALTAN] No se encontró PDF para:");
+        faltantes.forEach(n -> System.out.println("  × " + n));
+        throw new Exception("Hay PDFs faltantes: " + faltantes);
+    }
+}

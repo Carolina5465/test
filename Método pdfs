@@ -1,0 +1,99 @@
+@When("^Valido nombres de PDFs generados en ruta \"([^\"]+)\" y los comparo con numeros de declaraciones almacenados$")
+public void validoNombres_PDFs(String carpetaPdfs) throws Exception {
+
+    // === 0) Cargar números de declaraciones ===
+    Path baseDir = Paths.get(System.getProperty("user.dir"));
+    Path numerosTxt = baseDir.resolve("numeros_formularios_masivos.txt");
+    if (!Files.exists(numerosTxt)) {
+        throw new Exception("No existe el archivo de números: " + numerosTxt.toAbsolutePath());
+    }
+    List<String> numeros = Files.readAllLines(numerosTxt, StandardCharsets.UTF_8).stream()
+            .map(s -> s.replace("\uFEFF","").trim())
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+    if (numeros.isEmpty()) {
+        throw new Exception("El archivo de números está vacío: " + numerosTxt.toAbsolutePath());
+    }
+
+    // === 1) Listar PDFs recursivamente y ordenar por fecha (desc) ===
+    Path dir = Paths.get(carpetaPdfs); // soporta \\servidor\share\... o C:\...
+    if (!Files.isDirectory(dir)) {
+        throw new Exception("Ruta no válida (no es carpeta): " + dir.toAbsolutePath());
+    }
+
+    List<Path> pdfs;
+    try (Stream<Path> st = Files.walk(dir)) {
+        pdfs = st.filter(Files::isRegularFile)
+                 .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".pdf"))
+                 .sorted((a, b) -> { // más reciente primero
+                     try {
+                         return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a));
+                     } catch (IOException e) {
+                         // si falla fecha, deja al final
+                         return 0;
+                     }
+                 })
+                 .collect(Collectors.toList());
+    }
+    if (pdfs.isEmpty()) {
+        throw new Exception("No se encontraron PDFs (ni en subcarpetas) en: " + dir.toAbsolutePath());
+    }
+
+    System.out.println("[INFO] PDFs encontrados (ordenados, reciente→antiguo):");
+    for (Path p : pdfs) {
+        System.out.println("   - " + p.getFileName() + "  [" + p.getParent() + "]");
+    }
+
+    // === 2) Matching por contains: "0_" + numero ===
+    Map<String, Path> matchPorNumero = new LinkedHashMap<>();
+    Set<Path> usados = new HashSet<>();
+
+    for (String numero : numeros) {
+        String needle = ("0_" + numero).toLowerCase(); // patrón solicitado
+        Path hit = null;
+        for (Path p : pdfs) {
+            if (usados.contains(p)) continue;
+            String name = p.getFileName().toString().toLowerCase();
+            if (name.contains(needle)) {
+                hit = p;
+                break; // como está ordenado, el primero es el más reciente
+            }
+        }
+        if (hit != null) {
+            matchPorNumero.put(numero, hit);
+            usados.add(hit);
+        }
+    }
+
+    // === 3) Faltantes y sobrantes ===
+    List<String> faltantes = numeros.stream()
+            .filter(n -> !matchPorNumero.containsKey(n))
+            .collect(Collectors.toList());
+
+    List<Path> sobrantes = pdfs.stream()
+            .filter(p -> !usados.contains(p)) // PDFs que no matchearon ningún número
+            .collect(Collectors.toList());
+
+    // === 4) Log de resultados ===
+    System.out.println("\n===== RESUMEN VALIDACIÓN PDF =====");
+    System.out.println("[OK] Coincidencias: " + matchPorNumero.size() + "/" + numeros.size());
+    if (!matchPorNumero.isEmpty()) {
+        matchPorNumero.forEach((n, p) -> System.out.println("  ✔ " + n + " -> " + p.getFileName()));
+    }
+
+    if (!faltantes.isEmpty()) {
+        System.out.println("\n[FALTAN] No se encontró PDF para " + faltantes.size() + " números:");
+        faltantes.forEach(n -> System.out.println("  ✖ " + n));
+    }
+
+    if (!sobrantes.isEmpty()) {
+        System.out.println("\n[SOBRAN] PDFs que no matchean ningún número del listado:");
+        sobrantes.forEach(p -> System.out.println("  • " + p.getFileName()));
+    }
+    System.out.println("==================================\n");
+
+    // === 5) Falla el step si hay faltantes ===
+    if (!faltantes.isEmpty()) {
+        throw new Exception("Hay PDFs faltantes: " + faltantes);
+    }
+}

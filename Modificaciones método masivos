@@ -1,0 +1,20 @@
+Path pathActual = Paths.get(System.getProperty("user.dir"), "numeros_formularios_masivos.txt");
+
+if (!Files.exists(pathActual)) {
+    throw new Exception("El archivo numeros_formularios_masivos.txt no existe en la ruta esperada");
+}
+
+// Leer todo el contenido del archivo y quedarte solo con la última línea no vacía
+List<String> lineas = Files.readAllLines(pathActual, StandardCharsets.UTF_8)
+                          .stream()
+                          .filter(line -> !line.trim().isEmpty())
+                          .collect(Collectors.toList());
+
+if (lineas.isEmpty()) {
+    throw new Exception("El archivo numeros_formularios_masivos.txt está vacío");
+}
+
+// Tomar solo el último número
+String numeroFormularioActual = lineas.get(lineas.size() - 1).trim();
+
+System.out.println("[INFO] Validando únicamente el último formulario: " + numeroFormularioActual);

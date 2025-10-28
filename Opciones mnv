@@ -1,0 +1,7 @@
+mvn -B -q -DskipTests test-compile org.codehaus.mojo:exec-maven-plugin:3.1.0:java "-Dexec.mainClass=fast.common.runner.RunLauncher" "-Dexec.classpathScope=test" "-Djava.io.tmpdir=C:\tmp"
+
+
+mvn -B -q -DskipTests test-compile org.codehaus.mojo:exec-maven-plugin:3.1.0:java --% -Dexec.mainClass=fast.common.runner.RunLauncher -Dexec.classpathScope=test -Djava.io.tmpdir=C:\tmp
+
+
+mvn -B -q -DskipTests test-compile org.codehaus.mojo:exec-maven-plugin:3.1.0:java -Dexec.mainClass=fast.common.runner.RunLauncher -Dexec.classpathScope=test -Djava.io.tmpdir=C:\tmp

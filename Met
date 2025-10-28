@@ -1,0 +1,12 @@
+package fast.common.runner;
+
+public class RunLauncher {
+    public static void main(String[] args) {
+        try {
+            new RunCucumberTest().runFeatures(); // tu método real
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+}

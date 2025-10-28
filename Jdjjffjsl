@@ -1,0 +1,44 @@
+Path dir = Paths.get(rutaArchivo);
+if (!Files.exists(dir)) {
+    throw new Exception("Ruta no válida: " + dir.toAbsolutePath());
+}
+
+// Copiamos al portapapeles la ruta completa del directorio (sin el archivo)
+String rutaDirectorio = dir.getParent().toString();
+String nombreArchivo = dir.getFileName().toString();
+
+Robot robot = new Robot();
+robot.setAutoDelay(100);
+Thread.sleep(2000);
+
+// --- Copiar ruta al portapapeles ---
+StringSelection selection = new StringSelection(rutaDirectorio);
+Toolkit.getDefaultToolkit().getSystemClipboard().setContents(selection, null);
+
+// --- Pegar en la barra superior ---
+robot.keyPress(KeyEvent.VK_ALT);
+robot.keyPress(KeyEvent.VK_D);
+robot.keyRelease(KeyEvent.VK_D);
+robot.keyRelease(KeyEvent.VK_ALT);
+
+robot.keyPress(KeyEvent.VK_CONTROL);
+robot.keyPress(KeyEvent.VK_V);
+robot.keyRelease(KeyEvent.VK_V);
+robot.keyRelease(KeyEvent.VK_CONTROL);
+
+robot.keyPress(KeyEvent.VK_ENTER);
+robot.keyRelease(KeyEvent.VK_ENTER);
+
+Thread.sleep(1000);
+
+// --- Escribir el nombre del archivo en la barra inferior ---
+StringSelection archivoSeleccion = new StringSelection(nombreArchivo);
+Toolkit.getDefaultToolkit().getSystemClipboard().setContents(archivoSeleccion, null);
+
+robot.keyPress(KeyEvent.VK_CONTROL);
+robot.keyPress(KeyEvent.VK_V);
+robot.keyRelease(KeyEvent.VK_V);
+robot.keyRelease(KeyEvent.VK_CONTROL);
+
+robot.keyPress(KeyEvent.VK_ENTER);
+robot.keyRelease(KeyEvent.VK_ENTER);

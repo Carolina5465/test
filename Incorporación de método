@@ -1,0 +1,85 @@
+@When("^(\\*) capturo el numero indicador del formulario y lo almaceno en la variable (\\*)$")
+public void capturoFormularioDesdeTXT(String varName) throws Exception {
+
+    // 1) Archivos de trabajo
+    Path numerosFile = Paths.get(System.getProperty("user.dir"), "numeros_formularios_generadoXML.txt");
+    Path outFile     = Paths.get(System.getProperty("user.dir"), "identificador_generadoXML.txt");
+
+    if (!Files.exists(numerosFile)) {
+        throw new Exception("El archivo numeros_formularios_generadoXML.txt no existe en: " + numerosFile.toAbsolutePath());
+    }
+
+    // 1.1) Cargar todos los números (eliminando espacios y vacíos)
+    java.util.List<String> numeros = Files.readAllLines(numerosFile, StandardCharsets.UTF_8)
+            .stream()
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .collect(java.util.stream.Collectors.toList());
+
+    if (numeros.isEmpty()) {
+        throw new Exception("El archivo numeros_formularios_generadoXML.txt está vacío: " + numerosFile.toAbsolutePath());
+    }
+
+    // 2) Limpiar/crear archivo de salida
+    Files.write(outFile, new byte[0], StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+    String ultimoIdentificadorSoloNumero = null;
+
+    for (String numeroDeclaracion : numeros) {
+
+        // 3) XPath: fila que contiene el número y su primera columna
+        String xpathFila          = "//tr[.//td[contains(normalize-space(),'" + numeroDeclaracion + "')] or .//th[contains(normalize-space(),'" + numeroDeclaracion + "')]]";
+        String xpathPrimeraCol    = "(" + xpathFila + "/(td|th)[1])[1]";
+
+        System.out.println("[INFO] Buscando fila: " + xpathFila);
+        System.out.println("[INFO] Primera columna : " + xpathPrimeraCol);
+
+        // 3.1) Obtener texto con tu helper vía teststep (igual estilo que traes)
+        StepResult result = getManager().getTestStep("redirectControl").runXpath(xpathPrimeraCol);
+        if (result == null) {
+            throw new Exception("No se encontró texto en la 1ra columna para la declaración: " + numeroDeclaracion);
+        }
+
+        String raw = String.valueOf(result);
+        String norm = normalizaCelda(raw);
+        System.out.println("[INFO] Texto leido (raw) = " + raw);
+        System.out.println("[INFO] Texto normalizado  = " + norm);
+
+        // 4) Validación OkBOR / EnvBOR
+        boolean ok = "OKBOR".equals(norm) || "ENVBOR".equals(norm);
+        if (!ok) {
+            throw new Exception("[FAIL] El registro con número " + numeroDeclaracion +
+                    " no contiene OkBOR ni EnvBOR en la primera columna. Texto leído = [" + raw + "]");
+        }
+        System.out.println("[OK] " + numeroDeclaracion + " -> primera columna válida (" + norm + ")");
+
+        // 5) Guardar identificador
+        //    Si quieres guardar otra cosa (p.ej., un número extraído de otra columna),
+        //    cambia 'numeroAGuardar' por lo que corresponda.
+        String numeroAGuardar = numeroDeclaracion;
+
+        java.nio.file.Files.writeString(
+                outFile,
+                numeroAguardar + System.lineSeparator(),
+                java.nio.charset.StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND
+        );
+
+        ultimoIdentificadorSoloNumero = numeroAguardar;
+    }
+
+    // 6) Mensaje final
+    System.out.println("[OK] Identificadores guardados en: " + outFile.toAbsolutePath());
+    System.out.println("[CTX] Último identificador publicado en GlobalContext (" + varName + ") = " + ultimoIdentificadorSoloNumero);
+}
+
+// --- util: misma idea que veníamos usando para evitar falsos negativos ---
+private static String normalizaCelda(String s) {
+    if (s == null) return "";
+    String t = s.replace('\u00A0', ' ')
+                .trim()
+                .replaceAll("\\s+", " ")
+                .toUpperCase(java.util.Locale.ROOT);
+    return t.replace(" ", ""); // comparar sin espacios
+}

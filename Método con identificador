@@ -1,0 +1,110 @@
+@When("^\\* capturo el numero indicador del formulario y lo almaceno en la variable (\\*)$")
+public void capturoFormularioDesdeTXT(String varName) throws Exception {
+
+    // === 0) Archivos base
+    Path baseDir   = Paths.get(System.getProperty("user.dir"));
+    Path numerosFile = baseDir.resolve("numeros_formularios_generadoXML.txt");
+    Path outFile     = baseDir.resolve("identificador_generadoXML.txt");
+
+    if (!Files.exists(numerosFile)) {
+        throw new Exception("El archivo numeros_formularios_generadoXML.txt no existe en: " + numerosFile.toAbsolutePath());
+    }
+
+    // === 1) Cargar números (limpio)
+    java.util.List<String> numeros = Files.readAllLines(numerosFile, java.nio.charset.StandardCharsets.UTF_8)
+            .stream()
+            .map(s -> s == null ? "" : s.trim())
+            .filter(s -> !s.isEmpty())
+            .collect(java.util.stream.Collectors.toList());
+
+    if (numeros.isEmpty()) {
+        throw new Exception("El archivo numeros_formularios_generadoXML.txt está vacío: " + numerosFile.toAbsolutePath());
+    }
+
+    // === 2) Limpiar/crear archivo de salida
+    Files.write(outFile, new byte[0], java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+
+    String ultimoFormId = null;
+
+    // === 3) Procesar cada número de declaración
+    for (String numeroDeclaracion : numeros) {
+
+        // 3.1) Localizar la fila por número de declaración (match en cualquier celda)
+        String trXpath = "//table[contains(@id,'tbResultados')]//tr[td//*[normalize-space()='" + numeroDeclaracion + "']"
+                       + " or td[normalize-space()='" + numeroDeclaracion + "']]";
+
+        // 3.2) Validar la 1ra columna = OkBOR / EnvBOR (tolerante a HTML, nbsp, saltos)
+        String col1Xpath = trXpath + "/td[1]";
+        Object resCol1 = getManager().getTestStep("redirectControl").runXpath(col1Xpath);
+        if (resCol1 == null) {
+            throw new Exception("No se pudo leer la primera columna para la declaración: " + numeroDeclaracion);
+        }
+        String plainCol1 = normalize(String.valueOf(resCol1));
+        String norm = plainCol1.toUpperCase(java.util.Locale.ROOT).replaceAll("[^A-Z]", "");
+        if (!"OKBOR".equals(norm) && !"ENVBOR".equals(norm)) {
+            throw new Exception("[FAIL] El registro con número " + numeroDeclaracion
+                    + " no contiene OkBOR ni EnvBOR en la primera columna. Texto=[" + plainCol1 + "]");
+        }
+        System.out.println("[OK] Primera columna correcta (" + norm + ") para declaración " + numeroDeclaracion);
+
+        // 3.3) Extraer el NÚMERO DE FORMULARIO (localizador):
+        //      prioriza <a> en la fila; si no hay, intenta texto en la col 2; como último, link en col 1.
+        String[] candidatos = new String[] {
+                trXpath + "//a[normalize-space()][1]",
+                trXpath + "/td[2]//a[normalize-space()][1]",
+                trXpath + "/td[2]",
+                trXpath + "/td[1]//a[normalize-space()][1]",
+                trXpath + "/td[1]"
+        };
+
+        String formId = null;
+        for (String xp : candidatos) {
+            Object r = getManager().getTestStep("redirectControl").runXpath(xp);
+            if (r == null) continue;
+            String d = String.valueOf(r);
+            formId = firstDigits(d);
+            if (formId != null) break;
+        }
+
+        if (formId == null) {
+            throw new Exception("No se encontró número de FORMULARIO en la fila de la declaración " + numeroDeclaracion);
+        }
+
+        System.out.println("[OK] Número de formulario: " + formId);
+
+        // 3.4) Guardar SOLO el número de formulario (una línea por match)
+        java.nio.file.Files.writeString(
+                outFile,
+                formId + System.lineSeparator(),
+                java.nio.charset.StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND
+        );
+
+        ultimoFormId = formId;
+    }
+
+    // === 4) Mensaje final + (opcional) publicar en contexto
+    System.out.println("[OK] Identificadores (formularios) guardados en: " + outFile.toAbsolutePath());
+    if (ultimoFormId != null) {
+        GlobalContext.getInstance().setVariable(varName, ultimoFormId);
+        System.out.println("[CTX] Último identificador publicado en GlobalContext (" + varName + ") = " + ultimoFormId);
+    }
+}
+
+/* ===================== Helpers ===================== */
+private static String normalize(String s) {
+    if (s == null) return "";
+    return s.replace("\u00A0"," ")
+            .replaceAll("(?is)<br\\s*/?>"," ")
+            .replaceAll("(?is)<[^>]+>"," ")
+            .replaceAll("&nbsp;"," ")
+            .replaceAll("\\s+"," ")
+            .trim();
+}
+
+private static String firstDigits(String s) {
+    if (s == null) return null;
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)").matcher(s);
+    return m.find() ? m.group(1) : null;
+}

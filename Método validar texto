@@ -1,0 +1,35 @@
+// Utiliza el mismo helper que ya usas para leer texto por XPath.
+// Si tu helper se llama distinto (p.ej. uiAgent.getText, getTextByXpath, etc.)
+// reemplaza textOf(xp) por el tuyo.
+private String textOf(String xpath) throws Exception {
+    return helpers.ui().getText(xpath); // <-- adapta este llamado a tu helper real
+}
+
+@When("Valido en la tabla que la primera columna sea OkBOR o EnvBOR para el numero {string}")
+public void validoPrimeraColumnaOkOBorrado(String numeroDeclaracion) throws Exception {
+    // Fila que CONTIENE el número (en cualquier celda) y toma su primera celda visible
+    // Soporta <td> o <th> como primera columna.
+    String xp = "(//tr[.//td[contains(normalize-space(),'" + numeroDeclaracion + "')]" +
+                "     or .//th[contains(normalize-space(),'" + numeroDeclaracion + "')]]" +
+                "    /(td|th)[1])[1]";
+
+    String raw = textOf(xp);
+    String texto = normalizaCelda(raw);
+
+    boolean ok = texto.equals("OKBOR") || texto.equals("ENVBOR");
+    if (!ok) {
+        throw new Exception("[FAIL] El registro con número " + numeroDeclaracion +
+                " no contiene OkBOR ni EnvBOR en la primera columna. Texto leído=[" + raw + "]");
+    }
+    System.out.println("[OK] " + numeroDeclaracion + " -> " + raw);
+}
+
+// Normaliza igual que venimos haciendo: trim, colapsar espacios, NBSP y case-insensitive
+private static String normalizaCelda(String s) {
+    if (s == null) return "";
+    String t = s.replace('\u00A0',' ')        // NBSP -> espacio normal
+                .trim()
+                .replaceAll("\\s+", " ")      // colapsar espacios
+                .toUpperCase(Locale.ROOT);
+    return t.replace(" ", "");                 // comparar sin espacios
+}

@@ -1,0 +1,90 @@
+@When("^(\\*) capturo el numero indicador del formulario y lo almaceno en la variable (\\*)$")
+public void capturoFormularioDesdeTXT(String varName) throws Exception {
+
+    // === 1) Archivos de trabajo ===
+    Path baseDir     = Paths.get(System.getProperty("user.dir"));
+    Path numerosFile = baseDir.resolve("numeros_formularios_generadoXML.txt");
+    Path outFile     = baseDir.resolve("identificador_generadoXML.txt");
+
+    if (!Files.exists(numerosFile)) {
+        throw new Exception("El archivo numeros_formularios_generadoXML.txt no existe en: " + numerosFile.toAbsolutePath());
+    }
+
+    // 1.1) Cargar números (trim y sin vacíos)
+    java.util.List<String> numeros = Files.readAllLines(numerosFile, java.nio.charset.StandardCharsets.UTF_8)
+            .stream()
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .collect(java.util.stream.Collectors.toList());
+
+    if (numeros.isEmpty()) {
+        throw new Exception("El archivo numeros_formularios_generadoXML.txt está vacío: " + numerosFile.toAbsolutePath());
+    }
+
+    // === 2) Limpiar/crear archivo salida ===
+    Files.write(outFile, new byte[0],
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+
+    String ultimoIdentificadorSoloNumero = null;
+
+    // === 3) Procesar cada número ===
+    for (String numeroDeclaracion : numeros) {
+
+        // Fila que contenga el número (en cualquier celda)
+        String xpathFila = "//tr[.//td[contains(normalize-space(),'" + numeroDeclaracion + "')]"
+                + " or .//th[contains(normalize-space(),'" + numeroDeclaracion + "')]]";
+
+        // Primera columna de esa fila (td o th)
+        String xpathPrimeraCol = "(" + xpathFila + "/(td|th)[1])[1]";
+
+        System.out.println("[INFO] Fila: " + xpathFila);
+        System.out.println("[INFO] 1raCol: " + xpathPrimeraCol);
+
+        // Llamada por el agente (mismo patrón que ya usas)
+        Object step = getManager().getTestStep("redirectControl");
+        Object result = step == null ? null : getManager().getTestStep("redirectControl").runXpath(xpathPrimeraCol);
+
+        if (result == null) {
+            throw new Exception("No se encontró texto en la 1ra columna para la declaración: " + numeroDeclaracion);
+        }
+
+        // A partir del dump; limpiamos HTML básico y NBSP
+        String raw   = String.valueOf(result);
+        String plain = raw
+                .replace("\u00A0", " ")                  // NBSP → espacio
+                .replaceAll("(?is)<br\\s*/?>", " ")      // <br> → espacio
+                .replaceAll("(?is)<[^>]+>", " ")         // quitar etiquetas
+                .replaceAll("\\s+", " ")                 // colapsar espacios
+                .trim();
+
+        // Normalizamos para comparar (sin espacios, mayúsculas)
+        String cmp = plain.replace(" ", "").toUpperCase(java.util.Locale.ROOT);
+
+        System.out.println("[INFO] Texto 1ra col (raw): " + raw);
+        System.out.println("[INFO] Texto 1ra col (plain): " + plain);
+        System.out.println("[INFO] Texto 1ra col (cmp): " + cmp);
+
+        boolean esOK = "OKBOR".equals(cmp) || "ENVBOR".equals(cmp);
+        if (!esOK) {
+            throw new Exception("[FAIL] El registro con número " + numeroDeclaracion
+                    + " no contiene OkBOR ni EnvBOR en la primera columna. Texto leído = [" + plain + "]");
+        }
+        System.out.println("[OK] " + numeroDeclaracion + " -> primera columna válida (" + plain + ")");
+
+        // Guardar el mismo numeroDeclaracion en el archivo de salida
+        java.nio.file.Files.writeString(
+                outFile,
+                numeroDeclaracion + System.lineSeparator(),
+                java.nio.charset.StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND
+        );
+
+        ultimoIdentificadorSoloNumero = numeroDeclaracion;
+    }
+
+    // === 4) Mensajes finales (sin tocar manager/context si no es necesario) ===
+    System.out.println("[OK] Identificadores guardados en: " + outFile.toAbsolutePath());
+    System.out.println("[CTX] Último identificador (" + varName + ") = " + ultimoIdentificadorSoloNumero);
+}

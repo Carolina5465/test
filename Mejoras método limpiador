@@ -1,0 +1,24 @@
+// (C) Limpieza fuerte y validación OkBOR/EnvBOR
+String raw   = String.valueOf(result);
+System.out.println("[INFO] Texto col. (raw): [" + raw + "]");
+
+// 1) Quitar tags HTML y entidades comunes
+String plain = raw.replace("\u00A0"," ")
+                  .replaceAll("(?is)<br\\s*/?>"," ")
+                  .replaceAll("(?is)<[^>]+>"," ")
+                  .replaceAll("&nbsp;"," ")
+                  .replaceAll("\\s+"," ")
+                  .trim();
+System.out.println("[INFO] Texto col. (plain): [" + plain + "]");
+
+// 2) Normalizar quitando TODO lo que no sea letras A-Z
+String norm = plain.toUpperCase(java.util.Locale.ROOT)
+                   .replaceAll("[^A-Z]", "");   // <-- clave
+System.out.println("[INFO] Texto col. (norm): [" + norm + "]");
+
+// 3) Comparación final
+if (!"OKBOR".equals(norm) && !"ENVBOR".equals(norm)) {
+    throw new Exception("[FAIL] El registro con número " + numeroDeclaracion
+            + " no contiene OkBOR ni EnvBOR en la primera columna. Texto leído=[" + plain + "]");
+}
+System.out.println("[OK] Primera columna correcta ( " + norm + " ) para declaración " + numeroDeclaracion);
